@@ -1,0 +1,1596 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Worker Gantt - tick/real-time plant sim</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 16px; background: #f6f6f2; color: #222; }
+  h1 { font-size: 18px; margin: 0 0 4px 0; }
+  p.sub { font-size: 13px; color: #555; margin: 0 0 12px 0; max-width: 1050px; line-height:1.5; }
+  .legend { display: flex; gap: 14px; font-size: 12px; margin: 8px 0; flex-wrap: wrap; }
+  .sw { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .sw.sq { width: 12px; height: 12px; }
+  .wrap { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 16px; }
+  .toolbar { display: flex; gap: 10px; align-items: center; margin: 7px 0; flex-wrap: wrap; font-size: 13px; }
+  .toolbar button { font-size: 13px; padding: 5px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; }
+  .toolbar button:hover { background: #eee; }
+  .toolbar input[type=range] { width: 150px; }
+  .toolbar input[type=number] { width: 76px; font-size: 13px; padding: 4px 6px; }
+  .toolbar input.dm { border-color: #b07d2b; background: #fffaf0; }
+  .badge { font-size: 10px; background: #7a4a00; color: #fff; border-radius: 3px; padding: 1px 5px; vertical-align: middle; letter-spacing: .3px; }
+  .badge.derived { background: #4a4a4a; }
+  .hint { color: #888; font-size: 12px; }
+  #zoomLabel { min-width: 96px; color: #555; }
+  /* no scrolling and no manual resize at all: the time slider is the only way to
+     pan, and heights are sized from JS so nothing needs to scroll vertically */
+.scrollx { overflow: hidden; border: 1px solid #e3e3e3; border-radius: 6px; background: #fff; resize: none; min-height: 60px; min-width: 200px; max-width: 100%; }
+  /* heights are set from JS: axis + one row per worker / per spot */
+  .inner { position: relative; }
+  /* fixed viewport window drawn over the scrolling chart; the chart pans under it */
+  .chartwin { position: relative; }
+  .winbox { position: absolute; pointer-events: auto; z-index: 6; cursor: ew-resize;
+    /* 100px transparent hitbox with a 2px line drawn down its centre */
+    background: linear-gradient(to right,
+      rgba(192,57,43,0) 0, rgba(192,57,43,0) 49px,
+      #c0392b 49px, #c0392b 51px,
+      rgba(192,57,43,0) 51px, rgba(192,57,43,0) 100px); }
+  .axis { position: sticky; top: 0; background: #fff; border-bottom: 1px solid #ddd; z-index: 2; }
+  .tick { position: absolute; top: 0; bottom: 0; border-left: 1px solid #f0f0f0; font-size: 10px; color: #888; padding: 2px 0 0 3px; }
+  .tick.major { border-left-color: #ccc; color: #222; font-weight: bold; }
+.wintercell { position: absolute; top: 0; bottom: 0; background: #ddd; }
+  .row { position: relative; box-sizing: border-box; border-bottom: 1px solid #f4f4f4; }
+  .rowlabel { position: sticky; left: 0; background: #fff; z-index: 3; font-size: 10px; padding: 1px 6px; width: 90px; box-sizing: border-box; display: inline-block; color: #444; border-right: 1px solid #ddd; white-space: nowrap; overflow: hidden; vertical-align: top; }
+  .bar { position: absolute; border-radius: 2px; border: 1px solid rgba(0,0,0,.28); }
+  .stats { font-size: 13px; line-height: 1.6; }
+  .stats b { color: #000; }
+  code { background: #eee; padding: 1px 5px; border-radius: 4px; }
+  /* custom thumb so the ruler below can be inset by exactly the thumb width */
+  #timeSlider { -webkit-appearance: none; appearance: none; width: 100%; height: 18px; background: transparent; margin: 0; display: block; }
+  #timeSlider::-webkit-slider-runnable-track { height: 6px; background: #d5d5d0; border-radius: 3px; }
+  #timeSlider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -4px; background: #333; border-radius: 50%; border: 0; cursor: pointer; }
+  #timeSlider::-moz-range-track { height: 6px; background: #d5d5d0; border-radius: 3px; }
+  #timeSlider::-moz-range-thumb { width: 14px; height: 14px; background: #333; border: 0; border-radius: 50%; cursor: pointer; }
+  #timeSlider:focus { outline: none; }
+  .dmnote { background: #fffaf0; border: 1px solid #e8d5a8; border-radius: 6px; padding: 8px 12px; font-size: 12.5px; color: #5a4410; margin: 10px 0; line-height:1.55; }
+  table.kv { font-size: 12.5px; border-collapse: collapse; }
+  table.kv td { padding: 1px 8px 1px 0; }
+  table.kv.stat { margin-top: 4px; }
+  table.kv.stat th, table.kv.stat td { border: 1px solid #e0e0dc; padding: 3px 9px; text-align: right; }
+  table.kv.stat th:first-child, table.kv.stat td:first-child { text-align: left; }
+  table.kv.stat th { background: #f4f4f0; font-weight: bold; }
+  table.kv.stat.yrtab th:not(:first-child), table.kv.stat.yrtab td:not(:first-child) { text-align: center; }
+  details.consider { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; margin: 0 0 14px 0; }
+  details.consider > summary { cursor: pointer; font-size: 13px; font-weight: bold; color: #333; }
+  details.consider .cbody { font-size: 12.5px; color: #444; line-height: 1.6; margin-top: 8px; }
+  .ceil { margin: 6px 0 0 0; padding-left: 18px; }
+  .ceil li { margin-bottom: 5px; }
+  /* Estimated Limit hangs under Averaged Worker Output because it is derived
+     from it, so it reads as a continuation rather than a second ceiling. */
+  .ceil ul.sub { list-style: none; margin: 6px 0 0 0; padding: 0 0 0 12px;
+    border-left: 2px solid #dcdcd4; }
+  .floatgrp { position: sticky; top: 0; z-index: 40; background: #f6f6f2;
+    box-shadow: 0 3px 8px rgba(0,0,0,.14); }
+  .floatgrp .inFloat { margin-bottom: 8px; }
+  .wtscroll { max-height: 34vh; overflow-y: auto; overflow-x: hidden; }
+  /* Ephemeral simulation progress pill. simulate() is synchronous and blocks
+     the main thread, so this is shown BEFORE yielding to the browser and torn
+     down after - see withProgress(). */
+  #simProgress { position: fixed; right: 14px; bottom: 14px; z-index: 9999;
+    display: none; align-items: center; gap: 9px; padding: 9px 14px;
+    background: rgba(32,32,28,.92); color: #fff; border-radius: 20px;
+    font-size: 12.5px; font-weight: 600; letter-spacing: .2px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.28); }
+  #simProgress .spin { width: 13px; height: 13px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
+    animation: simspin .7s linear infinite; }
+  @keyframes simspin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #simProgress .spin { animation: none; } }
+</style>
+</head>
+<body>
+<h1 id="mainTitle">Manor Lords Veggie Backyard Simulator <span style="font-size:12px;font-weight:normal">(by <a href="https://www.youtube.com/@ManorLordsTheorycraft" target="_blank" rel="noopener">ManorLordsTheoryCraft</a>)</span></h1>
+
+<details class="consider">
+  <summary>Simulation considerations</summary>
+  <div class="cbody">
+    <b>Time.</b> Labour is tracked in continuous <b>real seconds</b>; the calendar runs in <b>day ticks</b> of 40s.
+    An action may straddle a tick edge &mdash; the worker never waits for one.
+    <b>Growth is tick based, not time based:</b> a spot ripens on a tick boundary a fixed number of day ticks after the tick its
+    sow finished in, so the sub-tick offset of the sow is discarded and the ripe edge always lands on a boundary.
+    <br><br>
+    <b>The spot cycle.</b> EMPTY &rarr; plow &rarr; PLOWED &rarr; sow &rarr; GROWING &rarr; (grow time) &rarr; RIPE &rarr; harvest &rarr; EMPTY.
+    Growth is always the full grow time in day ticks on the game clock; only the wall-clock wait varies, by less than one tick, with the sow offset.
+    <br><br>
+    <b>Workers.</b> Each carries its own clock, so several work different spots at the same time.
+    Task priority is harvest &rarr; sow &rarr; plow, breaking ties by the closest cell in Euclidean distance.
+    Walking is charged whenever a worker moves to another cell.
+    <br><br>
+    <b>Calendar.</b> A year is 365 days. Days 271&ndash;365 are <b>winter</b>: no labour, but growth continues, so
+    autumn crops ripen and wait for spring. Winter is excluded from all percentages and idle reporting.
+    <br><br>
+    <b>Field layout.</b> A near-square grid filled row-first from the bottom-left: the index runs left to right
+    along each row, then the next row up. No snake fill. Walking is between cell
+    centres, never by spot index.
+    <br><br>
+    <b>Datamined values.</b> See the Datamined game values section below.
+    <br><br>
+    <b>Not modelled:</b> worker pathfinding or collisions, tool quality, weather, and any yield multiplier.
+    Two workers may briefly converge on the same square since there is no collision model.
+  </div>
+</details>
+
+<details class="consider">
+  <summary>Datamined game values</summary>
+  <div class="cbody">
+    <div class="hint" style="margin-bottom:6px">All of the following were <b>datamined from game build 0.8.104</b>. They are
+    editable only so you can test other values if your build or your own testing disagrees.</div>
+    <div class="toolbar">
+      <label for="tick">Day Tick Duration (s)</label>
+      <input class="dm" id="tick" type="number" value="40" min="0.001" step="0.001" style="width:76px">
+      <span class="badge">DATAMINED</span>
+      <label for="plow" style="margin-left:14px">Plow (s)</label>
+      <input class="dm" id="plow" type="number" value="5.905" min="0.001" step="0.001" style="width:76px">
+      <span class="badge">DATAMINED</span>
+    </div>
+    <div class="toolbar">
+      <label for="sow">Sow (s)</label>
+      <input class="dm" id="sow" type="number" value="2.567" min="0.001" step="0.001" style="width:76px">
+      <span class="badge">DATAMINED</span>
+      <label for="harv" style="margin-left:14px">Harvest (s)</label>
+      <input class="dm" id="harv" type="number" value="2.289" min="0.001" step="0.001" style="width:76px">
+      <span class="badge">DATAMINED</span>
+      <label for="growT" style="margin-left:14px">Grow time (Day Ticks)</label>
+      <input class="dm" id="growT" type="number" value="70" min="1" step="1" style="width:76px">
+      <span class="badge">DATAMINED</span>
+    </div>
+    <div class="toolbar">
+      <label for="walkSpd">Walk speed (cm/s)</label>
+      <input class="dm" id="walkSpd" type="number" value="150" min="1" step="1" style="width:76px">
+      <span class="badge">DATAMINED</span>
+      <label for="cmIdx" style="margin-left:14px">cm per grid cell</label>
+      <input class="dm" id="cmIdx" type="number" value="100" min="1" step="1" style="width:76px">
+      <span class="badge">DATAMINED</span>
+      <span class="hint">walking is Euclidean between cell centres and is always charged when the worker moves</span>
+    </div>
+    <div class="toolbar">
+      <label for="baseYieldBeetroots" title="Vegetable yield per 100 plants, before YieldMod. Beetroots.">BaseYieldPer100Plants:Beetroots</label>
+      <input class="dm" id="baseYieldBeetroots" type="number" value="6" min="0" step="0.01" style="width:76px">
+      <span class="badge">DATAMINED</span>
+      <label for="baseYieldCarrots" style="margin-left:14px" title="Vegetable yield per 100 plants, before YieldMod. Carrots.">BaseYieldPer100Plants:Carrots</label>
+      <input class="dm" id="baseYieldCarrots" type="number" value="9" min="0" step="0.01" style="width:76px">
+      <span class="badge">DATAMINED</span>
+      <label for="baseYieldCabbages" style="margin-left:14px" title="Vegetable yield per 100 plants, before YieldMod. Cabbages.">BaseYieldPer100Plants:Cabbages</label>
+      <input class="dm" id="baseYieldCabbages" type="number" value="12" min="0" step="0.01" style="width:76px">
+      <span class="badge">DATAMINED</span>
+      <span class="hint">Actual crop yield = this &divide; 100 &times; YieldMod, rounded to a whole number</span>
+    </div>
+  </div>
+</details>
+
+<div class="wrap"><div class="stats" id="stats">simulating&hellip;</div></div>
+
+<div class="wrap">
+  <h1 style="font-size:14px">Setup and view</h1>
+<div class="hint" style="margin-bottom:6px">Grid is filled row-first from spot 1 bottom-left: left to right along each row, then up. Walking is between cell centres, never by spot index.</div>
+<div class="toolbar">
+    <label for="rowsSlider">Row count (rows)</label>
+    <input id="rowsSlider" type="range" min="1" max="30" step="1" value="2" style="width:230px">
+    <span id="rowsVal" style="min-width:30px;font-weight:bold">2</span>
+    <label style="margin-left:10px;white-space:nowrap"><input id="makeSquare" type="checkbox"> Make Square</label>
+    <label for="colsOut" style="margin-left:14px">Columns</label>
+    <input id="colsOut" type="number" value="5" min="1" max="500" step="1" style="width:60px;background:#f2f2f0" readonly>
+    <span id="gridLabel" class="hint"></span>
+  </div>
+  <div class="toolbar">
+    <label for="cropSelect"><b>Crop:</b></label>
+    <select id="cropSelect" style="font-size:13px;font-weight:bold">
+      <option value="70" style="color:rgb(110,0,150)">Beetroots</option>
+      <option value="98" style="color:rgb(220,110,0)">Carrots</option>
+      <option value="126" style="color:rgb(0,130,40)">Cabbages</option>
+    </select>
+    <label for="nSlider" style="margin-left:14px"><b>Number of Plants</b></label>
+    <input id="nSlider" type="range" min="1" max="400" step="1" value="10" style="width:200px">
+    <input id="nNum" type="number" min="1" max="2000" step="1" value="10" style="width:76px">
+    <span id="nLabel" class="hint"></span>
+    <label for="nFamilies" style="margin-left:14px">Family(s)</label>
+    <input id="nFamilies" type="number" min="1" max="10" step="1" value="1" style="width:60px">
+    <label for="smallholding" style="margin-left:10px" title="A smallholding puts a third pair of hands on the land instead of a second.">Smallholding</label>
+    <input id="smallholding" type="checkbox" style="vertical-align:-2px">
+    <span class="hint" id="famHint"></span>
+    <label for="capUnit" style="margin-left:14px">Sim length</label>
+    <select id="capUnit" style="font-size:13px"><option value="y" selected>years</option><option value="d">days</option></select>
+    <input id="capT" type="number" min="1" max="20000" step="1" value="3" style="width:76px">
+  </div>
+  <div class="toolbar">
+    <label for="yieldMod" title="Yield multiplier for vegetable backyard as reported in burgage General Tab under &quot;Efficiency&quot;.">YieldMod</label>
+    <input id="yieldMod" type="number" value="1.15" min="0" step="0.01" style="width:76px"
+      title="Yield multiplier for vegetable backyard as reported in burgage General Tab under &quot;Efficiency&quot;.">
+    <span class="hint" id="yieldHint"></span>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:12px;margin-top:10px">
+    <div>
+      <div style="font-size:11px;color:#666;margin-bottom:3px">Worker grid &mdash; one cell per worker: spot number, <b>W</b> walking, <b>?</b> idle</div>
+      <div id="workerGrid"></div>
+      <div class="legend" style="margin-top:5px">
+        <span><span class="sw" style="background:#8B4513"></span>plowing</span>
+        <span><span class="sw" style="background:#2e9e44"></span>sowing</span>
+        <span><span class="sw" style="background:#e67e22"></span>harvesting</span>
+        <span><span class="sw" style="background:#1565c0"></span>walking (<b>W</b>)</span>
+        <span><span class="sw" style="background:#dcdcdc;border:1px solid #bbb"></span>idle (<b>?</b>)</span>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:#666;margin-bottom:3px">Field grid &mdash; spot ids, filled by spot state; <b>thick border</b> = a worker is on it right now; <b>blue line</b> = a walk in this 0.1-day step <span id="gridPreview" style="display:none;color:#b00;font-weight:bold">Preview shape. Simulation will run on mouse release.</span></div>
+      <div id="gridKey"></div>
+      <div class="legend" style="margin-top:5px">
+        <span><span class="sw sq" style="background:#fff;border:1px solid #bbb"></span>Bare</span>
+        <span><span class="sw sq" style="background:#c69c6d"></span>Plowed</span>
+        <span><span class="sw sq" style="background:#b8e6b8"></span>Growing</span>
+        <span><span class="sw sq" style="background:#e67e22"></span>Ripe</span>
+        <span style="color:#555;margin-left:4px"><b style="border:2px solid #2b2b2b;padding:0 4px;">i</b> = Worker at this spot</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="floatgrp">
+  <div class="wrap inFloat" id="timeSec">
+    <h1 style="font-size:14px">Time Control</h1>
+    <div class="toolbar" style="justify-content:space-between">
+      <span>
+        <button id="stepBack" title="step back 0.1 day">&lt;</button>
+        <button id="stepFwd" title="step forward 0.1 day">&gt;</button>
+        <button id="play40x" title="40x = 1.0 day/s (0.1 day every 100ms)">&#9654; 40x</button>
+        <button id="play8x" title="8x = 0.2 day/s (0.1 day every 500ms)">&#9654; 8x</button>
+        <label for="timeSlider" style="margin-left:12px"><b>Time (day)</b></label>
+      </span>
+      <span id="timeVal" style="font-weight:bold">0.0</span>
+    </div>
+    <div>
+      <input id="timeSlider" type="range" min="1" max="271" step="0.1" value="1" style="width:100%">
+      <div id="timeRuler" style="position:relative;height:14px;margin:2px 7px 0 7px"></div>
+    </div>
+  </div>
+  <div class="wrap inFloat">
+    <h1 style="font-size:14px">Worker Timeline</h1>
+    <div class="hint" style="margin-bottom:5px">Bars for every worker. This chart and the Time Control above it float together.</div>
+    <div class="legend" style="margin-top:0">
+      <span><span class="sw" style="background:#8B4513"></span>plow</span>
+      <span><span class="sw" style="background:#2e9e44"></span>sow</span>
+      <span><span class="sw" style="background:#b8e6b8"></span><span id="growLbl">growing</span></span>
+      <span><span class="sw" style="background:#fff;border:1px solid #8c8c8c"></span>ripe-wait (crop ready, worker busy)</span>
+      <span><span class="sw" style="background:#e67e22"></span>harvest</span>
+      <span><span class="sw" style="background:#1565c0"></span>walk</span>
+      <span><span class="sw" style="background:#ddd"></span>idle</span>
+      <span><span class="sw" style="background:#ddd"></span>winter (header cells only, d271&ndash;365)</span>
+    </div>
+    <div class="wtscroll"><div class="chartwin">
+      <div class="scrollx" id="workerScroll"><div class="inner" id="workerGantt"></div></div>
+      <div class="winbox" id="workerWin"></div>
+    </div></div>
+  </div>
+</div>
+
+<div class="wrap">
+  <h1 id="plantTitle" style="font-size:14px">Plant Spots timeline</h1>
+  <div class="toolbar">
+    <button id="zoomOut">&minus; Zoom out</button>
+    <button id="zoomIn">+ Zoom in</button>
+    <button id="zoomReset">Reset</button>
+    <input id="zoomSlider" type="range" min="0.05" max="8" step="0.05" value="1.2" style="width:180px">
+    <span id="zoomLabel"></span>
+    <span class="hint">timelines pan with the time slider only &middot; no side scrolling, no manual resize</span>
+  </div>
+  <div class="chartwin">
+    <div class="scrollx" id="plantScroll"><div class="inner" id="plantGantt"></div></div>
+<div class="winbox" id="plantWin"></div>
+  </div>
+</div>
+<div class="wrap"><div class="stats" id="note"></div></div>
+
+<script>
+// ---------------------------------------------------------------- state
+var CFG = { tick:40, plow:5.905, sow:2.567, harv:2.289, growTicks:70,
+            walkSpd:150, cmIdx:100, simDays:365 };
+// Calendar: each year is 365 days. Days 271-365 are WINTER - no labour allowed,
+// but growth keeps running, so crops sown in autumn ripen and simply wait for
+// spring. Winter therefore shows up as worker idle and is excluded from the
+// percentages, which are relative to the 270-day active period.
+var YEAR_DAYS = 365, GROW_DAYS = 270;
+function winterSeconds(a, b){
+  var tot = 0;
+  var y0 = Math.floor(a / (YEAR_DAYS*CFG.tick)), y1 = Math.floor(b / (YEAR_DAYS*CFG.tick));
+  for (var y = y0; y <= y1; y++){
+    var ws = (y*YEAR_DAYS + GROW_DAYS) * CFG.tick;
+    var we = ((y+1)*YEAR_DAYS) * CFG.tick;
+    var s = Math.max(a, ws), e = Math.min(b, we);
+    if (e > s) tot += e - s;
+  }
+  return tot;
+}
+function activeSeconds(a, b){ return (b - a) - winterSeconds(a, b); }
+// Push a task that would land in winter forward to the next spring.
+function pushOutOfWinter(s, dur){
+  for (var g=0; g<2000; g++){
+    var day0 = Math.floor(s / CFG.tick);
+    var yd = day0 % YEAR_DAYS;
+    if (yd < GROW_DAYS){
+      var wStart = (day0 - yd + GROW_DAYS) * CFG.tick;
+      if (s + dur <= wStart) return s;                 // done before winter
+      s = (day0 - yd + YEAR_DAYS) * CFG.tick;          // skip the winter
+    } else {
+      s = (day0 - yd + YEAR_DAYS) * CFG.tick;          // already wintering
+    }
+  }
+  return s;
+}
+var N = 10, NW = 1, families = 1;
+// Crop name plus its BaseYieldPer100Plants, selected by the crop dropdown.
+var CROP_NAME = {70:'Beetroots', 98:'Carrots', 126:'Cabbages'};
+var CROP_BASEYIELD = {70:6, 98:9, 126:12};
+var CROP_COLOR = {70:'rgb(110,0,150)', 98:'rgb(220,110,0)', 126:'rgb(0,130,40)'};
+// Plants a single worker can keep: beetroots are quickest, cabbages slowest.
+var PER_WORKER_PLANTS = {70:250, 98:350, 126:450};
+function plantsCap(){
+  var per = PER_WORKER_PLANTS[CFG.growTicks];
+  if (per == null) per = PER_WORKER_PLANTS[70];
+  return Math.max(1, NW * per);
+}
+var CFG_YM = 1.15, cropName = 'Beetroots', baseYield = 6, cropColor = CROP_COLOR[70];
+function syncCrop(){
+  cropName = CROP_NAME[CFG.growTicks] || 'Beetroots';
+  baseYield = CROP_BASEYIELD[CFG.growTicks];
+  if (baseYield == null) baseYield = CROP_BASEYIELD[70];
+  cropColor = CROP_COLOR[CFG.growTicks] || CROP_COLOR[70];
+  return cropName;
+}
+// Plant count -> actual vegetable crop. Yield scales with the NUMBER OF PLANTS,
+// not with how many were worked, so this converts any plant count directly.
+// The base yield is a PER 100 PLANTS rate, hence the /100.
+// The crop name, coloured to match its swatch everywhere it is mentioned.
+function cropTag(){
+  return '<span style="color:'+cropColor+'">'+cropName+'</span>';
+}
+function vegYield(plants){
+  return Math.round(plants * CFG_YM * baseYield / 100);
+}
+var PX = 1.2;              // px per real second
+var STEP_DAY = 0.1;        // slider step: 0.1 DAY
+var EMPTY=0, PLOWED=1, GROWING=2, READY=3;
+var state, readyAt, enterT, actions, perSpot, endT;
+var counters, grownSec, fillInfo;
+
+// ---------------------------------------------------------------- grid
+// The grid is filled COLUMN-first bottom-up, so whole columns are occupied
+// before a partial one: with 13 spots in 5x3 the four left columns are full and
+// only the bottom cell of the rightmost column is used. Spot NUMBERS are then
+// assigned row-major from the bottom-left, giving
+//     10 11 12 13
+//      6  7  8  9
+//      1  2  3  4  5
+// i.e. 4 complete columns rather than 3. No snake fill.
+var COLS = 5, ROWS = 2, colsUser = false;
+function autoRows(n){ return Math.max(1, Math.ceil(Math.sqrt(n))); }
+// is this cell occupied? occupancy runs column by column, bottom-up
+function cellFilled(r, c){
+  return (c*ROWS + (ROWS - 1 - r)) < N;
+}
+// spot index (0-based) at an occupied cell, or -1 when the cell is spare
+function spotIndexAt(r, c){
+  if (!cellFilled(r, c)) return -1;
+  var idx = 0;
+  for (var rr = ROWS-1; rr > r; rr--)
+    for (var cc = 0; cc < COLS; cc++) if (cellFilled(rr, cc)) idx++;
+  for (var cd = 0; cd < c; cd++) if (cellFilled(r, cd)) idx++;
+  return idx;
+}
+function gridRC(i){                         // i is 0-based spot index
+  var seen = 0;
+  for (var r = ROWS-1; r >= 0; r--)
+    for (var c = 0; c < COLS; c++){
+      if (!cellFilled(r, c)) continue;
+      if (seen === i) return {r:r, c:c};
+      seen++;
+    }
+  return {r:ROWS-1, c:0};
+}
+function distCells(a, b){                   // a,b are 0-based spot indices
+  var ra = gridRC(a), rb = gridRC(b);
+  var dr = ra.r - rb.r, dc = ra.c - rb.c;
+  return Math.sqrt(dr*dr + dc*dc);         // always Euclidean
+}
+function distCm(a, b){ return distCells(a, b) * CFG.cmIdx; }
+function coordLabel(i){ var g = gridRC(i); return 'r'+(g.r+1)+'c'+(g.c+1); }
+
+// Growth is TICK based, not time based. A spot ripens on a tick boundary
+// growTicks ticks after the tick its sow finished in, so the sub-tick offset
+// of the sow is discarded. The game counts growTicks ticks either way; only
+// the wall-clock duration varies, from just over (growTicks-1)*tick seconds
+// (sown at the very end of a tick window) up to exactly growTicks*tick
+// seconds (sown at the very start of one).
+function growSecondsAvg(){ return (CFG.growTicks - 0.5) * CFG.tick; }
+function growSecondsMax(){ return CFG.growTicks * CFG.tick; }
+function growSecondsMin(){ return (CFG.growTicks - 1) * CFG.tick; }
+function tickOf(sec){ return Math.floor(sec / CFG.tick); }
+
+// ---------------------------------------------------------------- sim
+// One worker, one action at a time. Labour is continuous real seconds, so an
+// action may straddle a 40s tick boundary. Growth is TICK based: a spot ripens
+// on a tick boundary growTicks ticks after the tick its sow finished in, so
+// ripe time always snaps to a tick edge and the sub-tick offset of the sow is
+// discarded. That is the real-time vs tick-time discrepancy.
+function simulate(){
+  var t = 0, cap = CFG.simDays * CFG.tick;
+  state = new Uint8Array(N);
+  readyAt = new Float64Array(N);
+  enterT = new Float64Array(N);        // when a spot entered its current state
+  actions = [];
+  var firstSowTick = new Int32Array(N).fill(-1);
+  var firstReadyTick = new Int32Array(N).fill(-1);
+  var workers = [];
+  // each worker carries its OWN clock, so several can work different spots at
+  // the same time. A single shared clock would serialise them and make extra
+  // workers pointless: the same total labour, just split across more rows.
+  for (var w=0; w<NW; w++) workers.push({pos:0, freeAt:0});
+  grownSec = growSecondsAvg();
+
+  // State of spot i as the clock `when` sees it: a growing spot reads as ripe
+  // once its tick-based ready moment has passed, without needing a sweep.
+  function ripe(i, when){ return state[i]===GROWING && readyAt[i] <= when; }
+  // Every task this worker could take, each with the time it could START.
+  // A spot cannot be touched before it reached the required state, which is
+  // what stops two workers planning conflicting work on the same square.
+  function candidates(w){
+    var from = workers[w].freeAt, out = [];
+    for (var i=0;i<N;i++){
+      var typ, at;
+      // A growing spot is ALWAYS a candidate: it ripens at readyAt, so the
+      // worker can take it from that moment on. Testing ripeness against the
+      // worker's free time instead would hide the crop from a worker who is
+      // idling across the ripening.
+      if (state[i]===GROWING){ typ = 'harvest'; at = readyAt[i]; }
+      else if (state[i]===PLOWED){ typ = 'sow'; at = enterT[i]; }
+      else { typ = 'plow'; at = enterT[i]; }
+      var start = Math.max(from, at);
+      start = pushOutOfWinter(start, (CFG.plow + CFG.sow + CFG.harv) + 1);
+      if (start > cap) continue;
+      out.push({spot:i, type:typ, start:start, pri:(typ==='harvest'?1:typ==='sow'?2:3)});
+    }
+    return out;
+  }
+  // Soonest start wins. On a tie, task priority decides (harvest > sow > plow),
+  // then the closest cell. Priority only arbitrates between tasks that can
+  // begin at the same moment, so a worker never sits idle while work exists.
+  function better(a, b){
+    if (!b) return true;
+    if (a.start < b.start - 1e-9) return true;
+    if (Math.abs(a.start - b.start) > 1e-9) return false;
+    if (a.pri !== b.pri) return a.pri < b.pri;
+    return a.dist < b.dist - 1e-12;
+  }
+
+  while (true){
+    var best = null;
+    for (var wi=0; wi<NW; wi++){
+      var wk = workers[wi];
+      if (wk.freeAt > cap) continue;
+      var cands = candidates(wi);
+      var bc = null;
+      for (var ci=0; ci<cands.length; ci++){
+        var c = cands[ci];
+        c.dist = distCells(wk.pos, c.spot);
+        if (better(c, bc)) bc = c;
+      }
+      if (bc && better(bc, best)){ best = bc; best.w = wi; }
+    }
+    if (!best){
+      // Nobody has anything to do. If every worker is already past the horizon
+      // there is nothing left to wait for, so stop.
+      var anyFree = false;
+      for (var ei=0; ei<NW; ei++) if (workers[ei].freeAt <= cap){ anyFree = true; break; }
+      if (!anyFree) break;
+      var nt = Infinity;
+      for (var qi=0; qi<N; qi++) if (state[qi]===GROWING && readyAt[qi] < nt) nt = readyAt[qi];
+      if (nt === Infinity || nt > cap) break;
+      if (nt <= t) break;        // no forward progress is possible; stop
+      t = nt;
+      continue;
+    }
+    var W = workers[best.w];
+    var cm = distCm(W.pos, best.spot);
+    var walkEnd = best.start + cm / CFG.walkSpd;
+    if (walkEnd > cap){ W.freeAt = Infinity; continue; }
+    var dur = (best.type==='harvest') ? CFG.harv : (best.type==='sow' ? CFG.sow : CFG.plow);
+    var fin = walkEnd + dur;
+    if (fin > cap){ W.freeAt = Infinity; continue; }
+    // Logged only once the work is known to fit inside the run: pushing the walk
+    // first left an orphan walk segment for work that was then skipped.
+    if (cm > 1e-9)
+      actions.push({w:best.w, type:'walk', start:best.start, end:walkEnd, spot:best.spot+1, cm:cm});
+    var rdy = (best.type==='sow') ? (tickOf(fin) + CFG.growTicks) * CFG.tick : null;
+    actions.push({w:best.w, type:best.type, start:walkEnd, end:fin, spot:best.spot+1, ready:rdy});
+    W.pos = best.spot;
+    if (best.type==='harvest'){ state[best.spot]=EMPTY; enterT[best.spot]=fin; }
+    else if (best.type==='sow'){
+      state[best.spot]=GROWING; readyAt[best.spot]=rdy; enterT[best.spot]=fin;
+      if (firstSowTick[best.spot] < 0) firstSowTick[best.spot] = tickOf(fin) + 1;
+    }
+    else { state[best.spot]=PLOWED; enterT[best.spot]=fin; }
+    W.freeAt = fin;
+    if (fin > t) t = fin;
+  }
+  endT = t;
+  for (var ri=0; ri<N; ri++)
+    if (ripe(ri, cap) && firstReadyTick[ri] < 0) firstReadyTick[ri] = readyAt[ri]/CFG.tick + 1;
+  // IDLE IS DERIVED, NOT LOGGED: walk each worker's own actions and fill the
+  // gaps, so every timeline is contiguous end to end.
+  // The run spans the whole configured period, so each worker's timeline is
+  // filled out to spanEnd. Filling only to endT left the row short whenever the
+  // last action finished early (e.g. nothing left to do through winter), which
+  // is why the days failed to add up to the active period.
+  var spanEnd = CFG.simDays * CFG.tick;
+  actions = actions.filter(function(a){ return a.type !== 'idle'; });
+  for (var fw=0; fw<NW; fw++){
+    var mine = actions.filter(function(a){ return a.w === fw; })
+                      .sort(function(a,b){ return a.start - b.start; });
+    var prev = 0, idle = [];
+    for (var fi=0; fi<mine.length; fi++){
+      if (mine[fi].start > prev + 1e-9)
+        idle.push({w:fw, type:'idle', start:prev, end:mine[fi].start, spot:-1});
+      prev = Math.max(prev, mine[fi].end);
+    }
+    if (spanEnd > prev + 1e-9) idle.push({w:fw, type:'idle', start:prev, end:spanEnd, spot:-1});
+    actions = actions.concat(idle);
+  }
+  // Record where every walk CAME FROM, per worker in time order, so the field
+  // grid can draw the line between the two cell centres.
+  for (var rw=0; rw<NW; rw++){
+    var seq = actions.filter(function(a){ return a.w === rw; })
+                     .sort(function(a,b){ return a.start - b.start; });
+    var prevSpot = 0;                       // workers start on spot 1 (index 0)
+    for (var si=0; si<seq.length; si++){
+      var a2 = seq[si];
+      if (a2.type === 'idle') continue;
+      if (a2.type === 'walk') a2.from = prevSpot;
+      prevSpot = a2.spot - 1;
+    }
+  }
+  fillInfo = {sowLo:0, sowHi:0, ripeLo:0, ripeHi:0, seen:0};
+  for (var q=0;q<N;q++){
+    if (firstSowTick[q] < 0) continue;
+    fillInfo.seen++;
+    if (fillInfo.seen === 1){ fillInfo.sowLo = fillInfo.sowHi = firstSowTick[q];
+                              fillInfo.ripeLo = fillInfo.ripeHi = firstReadyTick[q]; }
+    else {
+      if (firstSowTick[q] < fillInfo.sowLo) fillInfo.sowLo = firstSowTick[q];
+      if (firstSowTick[q] > fillInfo.sowHi) fillInfo.sowHi = firstSowTick[q];
+      if (firstReadyTick[q] > 0 && firstReadyTick[q] < fillInfo.ripeLo) fillInfo.ripeLo = firstReadyTick[q];
+      if (firstReadyTick[q] > fillInfo.ripeHi) fillInfo.ripeHi = firstReadyTick[q];
+    }
+  }
+
+  counters = {plow:0, sow:0, harv:0, walk:0, idle:0, plowH:0, sowH:0, harvH:0, walkH:0, idleH:0, walkN:0, walkCm:0};
+  actions.forEach(function(a){
+    var h = a.end-a.start;
+    if (a.type==='plow'){counters.plow++;counters.plowH+=h;}
+    else if (a.type==='sow'){counters.sow++;counters.sowH+=h;}
+    else if (a.type==='harvest'){counters.harv++;counters.harvH+=h;}
+    else if (a.type==='walk'){counters.walk++;counters.walkH+=h;counters.walkN++;counters.walkCm += (a.cm||0);}
+    else if (a.type==='idle'){counters.idle++;counters.idleH+=h;}
+  });
+
+  // per-spot lifecycle segments
+  perSpot = [];
+  for (var pi=0; pi<N; pi++) perSpot.push([]);
+  actions.forEach(function(a){
+    if (a.spot < 1) return;
+    var sp = a.spot-1;
+    if (a.type==='plow') perSpot[sp].push({kind:'plow', start:a.start, end:a.end});
+    else if (a.type==='sow') perSpot[sp].push({kind:'sow', start:a.start, end:a.end, ready:a.ready, sownTick:tickOf(a.end)});
+    else if (a.type==='harvest'){
+      for (var j=perSpot[sp].length-1;j>=0;j--)
+        if (perSpot[sp][j].kind==='sow' && perSpot[sp][j].harvStart===undefined){
+          perSpot[sp][j].harvStart=a.start; perSpot[sp][j].harvEnd=a.end; break;
+        }
+    }
+  });
+  stats();
+}
+
+function stats(){
+  var T = CFG.tick;
+  var totalDays = Math.max(1, CFG.simDays);
+  var nYears = Math.ceil(totalDays / YEAR_DAYS);
+  // Category time + count, clipped to the ACTIVE period so winter never
+  // inflates idle. Labor is already excluded from winter by pushOutOfWinter.
+  var catSec = {plow:0, sow:0, harv:0, walk:0, idle:0};
+  var catCnt = {plow:0, sow:0, harv:0, walk:0, idle:0};
+  var perYear = [];
+  for (var y=0; y<nYears; y++) perYear.push({plow:0, sow:0, harv:0, walk:0, idle:0, cnt:0, active:0, full:true});
+  actions.forEach(function(a){
+    var c = (a.type==='plow')?'plow':(a.type==='sow')?'sow':(a.type==='harvest')?'harv':
+            (a.type==='walk')?'walk':(a.type==='idle')?'idle':null;
+    if (!c) return;
+    catSec[c] += activeSeconds(a.start, a.end);
+    catCnt[c]++;
+    var yi = Math.floor((a.start / T) / YEAR_DAYS);
+    if (yi >= 0 && yi < nYears){ perYear[yi][c] += activeSeconds(a.start, a.end); if (c==='harv') perYear[yi].cnt++; }
+  });
+  // Peak non-bare plant count per year: a spot counts as in use from the start
+  // of its plow until the end of the harvest that clears it. Peak is the maximum
+  // number of such spots at any instant, which is what actually limits output.
+  function occupiedIntervals(sp){
+    var iv = [], open = null, segs = perSpot[sp];
+    for (var i=0;i<segs.length;i++){
+      var g = segs[i];
+      if (g.kind === 'plow'){ if (!open) open = {s:g.start, e:endT}; }
+      else if (g.kind === 'sow'){ if (open) open.e = g.ready; }
+      else if (g.kind === 'harvest'){ if (open){ open.e = g.harvEnd; iv.push(open); open = null; } }
+    }
+    if (open) iv.push(open);
+    return iv;
+  }
+  function peakInYear(yi){
+    var T0 = yi*YEAR_DAYS*T, T1 = Math.min(totalDays, (yi+1)*YEAR_DAYS)*T;
+    var ev = [];
+    for (var sp=0; sp<N; sp++){
+      var ivs = occupiedIntervals(sp);
+      for (var k=0;k<ivs.length;k++){
+        var s = ivs[k].s, e = ivs[k].e;
+        if (e <= T0 || s >= T1) continue;
+        ev.push([Math.max(s,T0), 1]);
+        ev.push([Math.min(e,T1), -1]);
+      }
+    }
+    ev.sort(function(a,b){ return a[0]-b[0] || b[1]-a[1]; });   // ends before starts at a tie
+    var cur = 0, peak = 0;
+    for (var m=0;m<ev.length;m++){ cur += ev[m][1]; if (cur > peak) peak = cur; }
+    return peak;
+  }
+  var activeDaysTotal = 0;
+  for (var yy=0; yy<nYears; yy++){
+    var yStart = yy*YEAR_DAYS, yEnd = Math.min(totalDays, (yy+1)*YEAR_DAYS);
+    perYear[yy].full = (yEnd - yStart) === YEAR_DAYS;
+    for (var dd=yStart; dd<yEnd; dd++) if (dd % YEAR_DAYS < GROW_DAYS) perYear[yy].active++;
+    activeDaysTotal += perYear[yy].active;
+  }
+  // worker-days: with NW workers the categories sum to NW x active days, so the
+  // percentage base has to be per-worker-day or the row cannot total 100%.
+  var workerDays = activeDaysTotal * NW;
+  var d1 = function(s){ return (s / T).toFixed(1); };
+  var p1 = function(s, base){ return (100*s/(base*T)).toFixed(1)+'%'; };
+  var cats = [['plow','Plow'],['sow','Sow'],['harv','Harvest'],['walk','Walk'],['idle','Idle']];
+  var sumSec = 0, sumCnt = 0;
+  for (var k=0;k<cats.length;k++){ sumSec += catSec[cats[k][0]]; sumCnt += catCnt[cats[k][0]]; }
+  var wholeYears = (totalDays % YEAR_DAYS === 0);
+  var nWhole = totalDays / YEAR_DAYS;
+  var yrsTxt = wholeYears
+    ? ' = <b>'+nWhole+' year'+(nWhole>1?'s':'')+'</b>'
+    : ' <span class="hint">(not a whole number of years &mdash; Y'+nYears+' is partial)</span>';
+  var actParts = [];
+  for (var ap=0; ap<nYears; ap++) actParts.push('Y'+(ap+1)+' '+perYear[ap].active);
+  var h = '<h1 style="font-size:15px;margin:0 0 6px 0">Simulation Statistics</h1>'+
+    '<div style="font-size:12.5px;color:#555;margin-bottom:8px">'+
+    N+' spots &middot; '+NW+' worker'+(NW>1?'s':'')+' &middot; simulated <b>'+totalDays+' days</b>'+yrsTxt+
+    ' &middot; active period <b>'+activeDaysTotal+' days</b> ('+actParts.join(' + ')+
+    '; winter d'+(GROW_DAYS+1)+'&ndash;'+YEAR_DAYS+' excluded from all figures)</div>';
+
+  h += '<b>Whole run</b> &mdash; the five categories tile the active period exactly, so days total <b>'+
+       workerDays+'</b> ('+activeDaysTotal+' active days x '+NW+' worker'+(NW>1?'s':'')+') and % totals 100.0%<br>';
+  h += '<table class="kv stat"><tr><th>Whole run</th>';
+  for (var k2=0;k2<cats.length;k2++) h += '<th>'+cats[k2][1]+'</th>';
+  h += '<th>Total</th></tr>';
+  h += '<tr><td>count</td>';
+  for (var kc=0;kc<cats.length;kc++) h += '<td>'+catCnt[cats[kc][0]]+'</td>';
+  h += '<td>'+sumCnt+'</td></tr>';
+  h += '<tr><td>days</td>';
+  for (var k3=0;k3<cats.length;k3++) h += '<td>'+d1(catSec[cats[k3][0]])+'</td>';
+  h += '<td>'+d1(sumSec)+'</td></tr>';
+  h += '<tr><td>% of active</td>';
+  for (var k4=0;k4<cats.length;k4++) h += '<td>'+p1(catSec[cats[k4][0]], workerDays)+'</td>';
+  h += '<td>'+p1(sumSec, workerDays)+'</td></tr></table>';
+
+  h += '<div style="height:12px"></div><b>Per year</b><br>';
+  h += '<table class="kv stat yrtab"><tr><th></th>';
+  for (var yh=0; yh<nYears; yh++)
+    h += '<th>Y'+(yh+1)+(perYear[yh].full?'':' <span style="color:#b00">*</span>')+'</th>';
+  h += '</tr>';
+  h += '<tr><td>Harvest (Plant Count)</td>';
+  for (var y5=0; y5<nYears; y5++) h += '<td>'+perYear[y5].cnt+'</td>';
+  h += '</tr>';
+  h += '<tr><td title="Plant count &times; YieldMod &times; BaseYieldPer100Plants &divide; 100, rounded.">Harvest (<b style="color:'+cropColor+'">'+cropName+'</b> Yield)</td>';
+  for (var y5v=0; y5v<nYears; y5v++) h += '<td style="color:'+cropColor+';font-weight:bold">'+vegYield(perYear[y5v].cnt)+'</td>';
+  h += '</tr>';
+  h += '<tr><td>Peak Plant Spot Utilization (Count)(% of Total)</td>';
+  for (var y8=0; y8<nYears; y8++){
+    var pk2 = peakInYear(y8), pc2 = 100*pk2/N;
+    h += '<td'+(pc2 < 100 ? ' style="color:#b00;font-weight:bold"' : '')+'>'+pk2+' ('+pc2.toFixed(1)+'%)</td>';
+  }
+  h += '</tr>';
+  h += '<tr><td title="Working only: plow + sow + harvest. Excludes walking.">Worker Utilization (Working Only%)</td>';
+  for (var y6=0; y6<nYears; y6++){
+    var base7 = Math.max(1, perYear[y6].active*NW*T);
+    var wkOnly = perYear[y6].plow + perYear[y6].sow + perYear[y6].harv;
+    h += '<td>'+(100*wkOnly/base7).toFixed(1)+'%</td>';
+  }
+  h += '</tr>';
+  // Walking counts as non-idle, so the next figure is working PLUS walking and
+  // reads higher than the row above. The gap between the two IS the walk share.
+  h += '<tr><td title="Working plus walking. Walking is not idle, so this overstates productive time.">Worker Utilization (Non-Idle%, incl. walking)</td>';
+  for (var y6b=0; y6b<nYears; y6b++){
+    var base7b = Math.max(1, perYear[y6b].active*NW*T);
+    h += '<td>'+(100*(1 - perYear[y6b].idle/base7b)).toFixed(1)+'%</td>';
+  }
+  h += '</tr></table>';
+
+  var partial = [];
+  for (var y4=0; y4<nYears; y4++) if (!perYear[y4].full) partial.push('Y'+(y4+1)+' ('+perYear[y4].active+' active days)');
+  if (partial.length)
+    h += '<div style="color:#b00;font-size:12.5px;margin-top:5px">'+
+      'Warning: not a full year - '+partial.join(', ')+'. Only '+totalDays+' of '+(nYears*YEAR_DAYS)+
+      ' days simulated, so those figures are not comparable with a 365-day year.</div>';
+
+  // Per-plant annual yield, used to size the yard. A spot turns over
+  // floor(270/growTicks) times inside the growing days, plus 1 for the crop that
+  // ripens through winter and is picked in spring.
+  // NOT called perSpot: that name is the global per-spot lifecycle array.
+  var yieldPerPlant = Math.max(1, Math.floor(GROW_DAYS / CFG.growTicks) + 1);
+
+  // ESTIMATED LIMIT. Every completed crop costs one plow + one sow + one
+  // harvest + the walk to reach that spot, so the crew's capacity is its
+  // available seconds divided by that cost. Assumes the crew is never idle.
+  var perCycle = CFG.plow + CFG.sow + CFG.harv;
+  // Walking is charged per COMPLETED cycle (walk seconds / harvests). Dividing
+  // all labour by harvests instead would also charge the plow+sow of the cycle
+  // still in progress at the end of the run, which never closes a cycle.
+  var walkPerCycle = catSec.walk / Math.max(1, catCnt.harv);
+  var measuredPerCycle = perCycle + walkPerCycle;   // whole-run figure, startup included
+
+  // AVERAGED WORKER OUTPUT: what the crew actually delivered, averaged over
+  // complete years only. Y1 is excluded because it carries the startup ramp
+  // (spots fill from bare, so it understates a steady year), and any partial
+  // year is excluded because it is not comparable with a 365-day year.
+  var wlYears = [];
+  for (var yw=1; yw<nYears; yw++) if (perYear[yw].full) wlYears.push(yw);
+  if (!wlYears.length) for (var yw2=0; yw2<nYears; yw2++) if (perYear[yw2].full) wlYears.push(yw2);
+  var avgOut = 0, avgOutScaled = false;
+  if (wlYears.length){
+    var wsum = 0;
+    for (var wi=0; wi<wlYears.length; wi++) wsum += perYear[wlYears[wi]].cnt;
+    avgOut = wsum / wlYears.length;
+  } else {
+    // No complete year in the run at all - scale the partial run to one year.
+    avgOutScaled = true;
+    avgOut = catCnt.harv / Math.max(1, activeDaysTotal) * GROW_DAYS;
+  }
+  // The limit uses the STEADY-STATE per-cycle cost. The whole-run figure above
+  // is inflated by Y1, when the yard is still filling and the worker walks
+  // further per crop, which made the ceiling contradict the run. Measuring over
+  // the same qualifying years as the output keeps the two consistent.
+  var qBusy = 0, qHarv = 0;
+  for (var qy=0; qy<wlYears.length; qy++){
+    var qyY = perYear[wlYears[qy]];
+    qBusy += qyY.plow + qyY.sow + qyY.harv + qyY.walk;
+    qHarv += qyY.cnt;
+  }
+  var steadyPerCycle = qHarv > 0 ? qBusy / qHarv : measuredPerCycle;
+  var estLimit = NW * CFG.tick / steadyPerCycle * GROW_DAYS;
+  var utilAvg = qHarv > 0 ? (qBusy / (wlYears.length * GROW_DAYS * CFG.tick * NW)) : 0;
+  // Smallest yard that can actually feed the crew: output is capped at
+  // min(estLimit, plants x perSpot), so plants x perSpot must reach estLimit.
+  var plantsNeeded = Math.max(1, Math.ceil(estLimit / yieldPerPlant));
+  // BOUND BY LAND OR BY LABOUR, decided from how hard the crew actually worked.
+  // A crew that is never idle used all the hours it had, so labour is the cap
+  // and more plants cannot help. A crew that sat idle had hours it could not
+  // fill, which means there was not enough produce ready to pick - that is a
+  // shortage of plants, and it is fixable by adding them.
+  var labourBound = utilAvg >= 0.98;
+  var yrLabel = wlYears.length ? ('Y'+wlYears.map(function(y){return y+1;}).join('&ndash;Y')) : '';
+  var exclY1 = wlYears.length > 0 && wlYears.indexOf(0) < 0;
+  var underbuilt = 0, underbuiltNote = '';
+  for (var ub=0; ub<nYears; ub++){
+    var pk = peakInYear(ub);
+    if (pk < N){ underbuilt = 1; underbuiltNote = 'Year '+(ub+1)+' peaked at '+pk+' of '+N+
+      ' spots in use ('+(100*pk/N).toFixed(1)+'%), so the crew never even gets every spot into production. '; }
+  }
+  // A harvest count is NOT a crop yield. The simulation counts harvest actions;
+  // the crop has to be converted on top via YieldMod x BaseYield / 100. Both are
+  // shown because they differ by roughly the conversion factor, and the yield
+  // half is bold and coloured so the two are never read as one number.
+  function rateBoth(x){
+    return x.toFixed(0)+' harvests/yr (<b style="color:'+cropColor+'">'+vegYield(x)+' '+cropName+'/yr</b>)';
+  }
+  h += '<div style="font-size:12.5px;color:#555;margin-top:8px;line-height:1.6">'+
+    '<u><b>Ceilings</b></u> &mdash; per year.<ul class="ceil">'+
+    '<li><b>Averaged Worker Output: '+rateBoth(avgOut)+'</b> &mdash; what the crew actually delivered in '+
+    'this simulation, averaged over '+(avgOutScaled ? 'the partial run, scaled up to a full year' : yrLabel)+'. '+
+    (exclY1 ? '<b>Y1 is excluded</b> because it carries the startup ramp, when the spots are still filling from bare. ' : '')+
+    (avgOutScaled ? '' : 'Any partial year is excluded as well, being shorter than a 365-day year. ')+
+    '<ul class="sub">'+
+      '<li><b>Estimated Limit: '+rateBoth(estLimit)+'</b> &mdash; a naive estimate of the '+
+      '<b>Averaged Worker Output</b> if <b>Worker Utilization (incl walking)</b> of <b>'+
+      (100*utilAvg).toFixed(1)+'%</b> is scaled to <b>100%</b> by increasing the plant count from <b>'+N+
+      '</b> to <b>'+plantsNeeded+'</b>, worked by <b>'+NW+'</b> worker'+((NW>1)?'s':'')+' from <b>'+families+
+      '</b> famil'+((families>1)?'ies':(families===1?'y':'ies'))+'. '+
+      'Each plant carries only <b>'+yieldPerPlant+'</b> harvests/yr, so it takes <b>'+plantsNeeded+
+      '</b> plants to feed this crew.</li>'+
+    '</ul></li>'+
+    '</ul>';
+  h += '<b>You are bound by '+(labourBound ? 'labour' : 'land')+'.</b> ';
+  if (labourBound){
+    h += 'The crew worked '+(100*utilAvg).toFixed(1)+'% of the hours it had and delivered '+
+      avgOut.toFixed(0)+' of an estimated '+rateBoth(estLimit)+', so labour is the cap. '+
+      '<b>Adding plant spots would not raise output &mdash; only more families will.</b> '+
+      'You already have '+N+' plants against the '+plantsNeeded+' needed, so keep the spot count as it is.';
+  } else {
+    h += 'The crew was only '+(100*utilAvg).toFixed(1)+'% busy and delivered '+avgOut.toFixed(0)+
+      ' against an estimated capacity of '+rateBoth(estLimit)+', so it had hours it could not fill: '+
+      'there was not enough ready to pick. <b>Adding plant spots will raise output</b> &mdash; at least '+
+      plantsNeeded+' are needed to feed this crew, and you have '+N+
+      (N < plantsNeeded ? ', which is '+(plantsNeeded-N)+' short.' : '.');
+  }
+  if (underbuilt)
+    h += '<div style="color:#b00;margin-top:5px">Warning: '+underbuiltNote+
+      'The backyard is larger than the crew can work — reduce the plant count or add workers.</div>';
+  h += '</div>';
+  document.getElementById('stats').innerHTML = h;
+  var cs = document.getElementById('cropSelect');
+  var crop = CROPS[parseInt(cs.value)] || CROPS[70];
+  cs.style.color = crop.col;
+  if (parseInt(cs.value) !== CFG.growTicks && CROPS[CFG.growTicks] === undefined)
+    cs.value = String(CFG.growTicks);
+  var gl = document.getElementById('growLbl');
+  if (gl) gl.textContent = 'growing ('+CFG.growTicks+' day ticks)';
+  document.getElementById('nLabel').textContent = N + ' spots';
+  document.getElementById('plantTitle').textContent = 'Plant Spots timeline ('+N+')';
+}
+function ripeCount(){ var n=0; for (var i=0;i<N;i++) if (state[i]===READY) n++; return n; }
+function growingCount(){ var n=0; for (var i=0;i<N;i++) if (state[i]===GROWING) n++; return n; }
+function plowedCount(){ var n=0; for (var i=0;i<N;i++) if (state[i]===PLOWED) n++; return n; }
+function bareCount(){ return N - ripeCount() - growingCount() - plowedCount(); }
+
+// ---------------------------------------------------------------- render
+var COL = {plow:'#8B4513', sow:'#2e9e44', harvest:'#e67e22', walk:'#1565c0', idle:'#ddd', ripeWait:'#ffffff'};
+function secs2clock(s){
+  var d = Math.floor(s/CFG.tick) + 1;
+  var into = s - (d-1)*CFG.tick;
+  return 'd'+d+' +'+into.toFixed(1)+'s';
+}
+function makeAxis(container, width){
+  var ax = document.createElement('div');
+  ax.className='axis'; ax.style.width=width+'px'; ax.style.height=AXIS_H+'px';
+  var maxDays = Math.max(1, CFG.simDays);
+  var pxPerTick = CFG.tick * PX;
+  // WINTER d271-365 of every year, as a grey fill in the header cells only.
+  // Appended before the ticks so the day labels still read on top of it.
+  for (var wy=0; ; wy++){
+    var wx0 = 90 + (wy*YEAR_DAYS + GROW_DAYS) * pxPerTick;
+    if (wx0 > width) break;
+    var wx1 = 90 + (wy+1)*YEAR_DAYS * pxPerTick;
+    var wb = document.createElement('div');
+    wb.className = 'wintercell';
+    wb.style.left = wx0 + 'px';
+    wb.style.width = Math.max(1, Math.min(wx1, width) - wx0) + 'px';
+    wb.title = 'winter d'+(wy*YEAR_DAYS+GROW_DAYS+1)+'-d'+((wy+1)*YEAR_DAYS)+': no labour, growth continues';
+    ax.appendChild(wb);
+  }
+  // gridline on EVERY tick; label only as often as fits without colliding
+  var everyN = 1;
+  while (pxPerTick * everyN < 46 && everyN < maxDays) everyN++;
+  for (var k=0; k<=maxDays; k++){
+    var d = document.createElement('div');
+    d.className='tick'+((k % everyN === 0) ? ' major' : '');
+    d.style.left = (90 + k*pxPerTick)+'px';
+    if (k % everyN === 0) d.textContent = 'd'+(k+1);
+    ax.appendChild(d);
+  }
+  container.appendChild(ax);
+}
+var SPOT_BARE=0, SPOT_PLOWED=1, SPOT_GROWING=2, SPOT_RIPE=3;
+var SPOT_FILL = ['#ffffff', '#c69c6d', '#b8e6b8', '#e67e22'];
+var SPOT_NAME = ['bare', 'plowed', 'growing', 'ripe'];
+var TASK_FILL = {plow:'#8B4513', sow:'#2e9e44', harvest:'#e67e22', walk:'#1565c0', idle:'#dcdcdc'};
+var CELL = 22;
+var AXIS_H = 22, ROW_H_WORKER = 18, ROW_H_PLANT = 11;
+
+// Reconstruct a spot's state at an arbitrary time from its lifecycle segments.
+// Segments are chronological per spot, so later ones override earlier ones.
+function spotStateAt(sp, tq){
+  var segs = perSpot[sp], cur = SPOT_BARE;
+  for (var i=0;i<segs.length;i++){
+    var g = segs[i];
+    if (g.start > tq) break;
+    if (g.kind === 'plow'){ if (tq >= g.start) cur = SPOT_PLOWED; }
+    else if (g.kind === 'sow'){
+      if (tq < g.end) cur = SPOT_PLOWED;              // sow in flight, not sown yet
+      else if (tq < g.ready) cur = SPOT_GROWING;
+      else if (g.harvStart !== undefined && tq >= g.harvEnd) cur = SPOT_BARE;
+      else cur = SPOT_RIPE;                           // ripe, or mid-harvest
+    }
+  }
+  return cur;
+}
+// Where each worker stands and what it is doing at time tq.
+function workerAt(w, tq){
+  var pos = 0, task = 'idle';
+  for (var i=0;i<actions.length;i++){
+    var a = actions[i];
+    if (a.w !== w) continue;
+    if (a.start > tq) break;
+    if (a.type !== 'idle') pos = a.spot-1;
+    task = a.type;
+  }
+  return {pos:pos, task:task};
+}
+// Tick marks under the time slider: one at 0, then one every growth-ticks,
+// so each mark is a harvest cycle boundary. Ruler is inset by half the 14px
+// thumb so mark positions line up with where the thumb actually travels.
+function renderTimeRuler(){
+  var host = document.getElementById('timeRuler');
+  host.innerHTML = '';
+  var step = Math.max(1, Math.round(CFG.growTicks));
+  var total = Math.max(1, CFG.simDays);           // days elapsed from day 1
+  var days = [];
+  for (var t = 0; t <= total; t += step) days.push(1 + t);   // 1.0, 1+G, 1+2G ...
+  if (days[days.length-1] < 1 + total) days.push(1 + total);
+  var every = Math.max(1, Math.ceil(days.length / 26));
+  for (var i=0; i<days.length; i++){
+    var d = days[i];
+    var el = document.createElement('div');
+    var last = (i === days.length-1);
+    el.style.cssText = 'position:absolute;left:'+(((d-1)/total)*100).toFixed(4)+'%;top:0;height:12px;'
+      + 'border-left:'+(last ? '2px solid #8a8a84' : '1px solid #b4b4ae')+';'
+      + 'font-size:9px;color:#666;white-space:nowrap;padding-left:3px;'
+      + 'transform:translateX('+(i===0 ? '0' : '-50%')+');';
+    if (i % every === 0 || last) el.textContent = d.toFixed(0);
+    host.appendChild(el);
+  }
+}
+// Grids are rebuilt only when the shape changes (N/rows/cols/workers);
+// scrubbing and playback just repaint the existing cells, which keeps
+// 40 repaints a second cheap.
+var gSig = '', gCells = [], wCells = [], gridSvg = null;
+function buildGrids(){
+  var sig = [N, COLS, ROWS, NW].join('|');
+  if (sig === gSig) return false;   // geometry unchanged, DOM still valid
+  gSig = sig; gCells = []; wCells = [];
+  var host = document.getElementById('gridKey');
+  host.innerHTML = '';
+  var wrap = document.createElement('div');
+  wrap.style.display = 'inline-block';
+  wrap.style.position = 'relative';   // containing block for the SVG overlay
+  var tbl = document.createElement('div');
+  tbl.style.display = 'grid';
+  tbl.style.gridTemplateColumns = 'repeat('+COLS+', '+CELL+'px)';
+  tbl.style.gridAutoRows = CELL+'px';
+  tbl.style.borderLeft = '2px solid #8f8f88';
+  tbl.style.borderTop = '2px solid #8f8f88';
+  for (var r = 0; r < ROWS; r++){
+    for (var c = 0; c < COLS; c++){
+      var i = spotIndexAt(r, c);
+      var spare = (i < 0);
+      var cell = document.createElement('div');
+      cell.style.cssText = 'box-sizing:border-box;width:'+CELL+'px;height:'+CELL+'px;line-height:'+CELL+'px;'
+        + 'text-align:center;font-size:10px;font-weight:bold;border-right:1px solid #8f8f88;border-bottom:1px solid #8f8f88;'
+        + (spare ? 'background:#f7f7f4;color:#c4c4bf;' : 'color:#333;');
+      cell.textContent = spare ? '' : String(i+1);
+      if (!spare) cell.title = 'spot '+(i+1)+'  '+coordLabel(i);
+      tbl.appendChild(cell);
+      gCells.push({el:cell, i:i});
+    }
+  }
+  wrap.appendChild(tbl);
+  // SVG overlay for the blue worker-walk lines, sitting on top of the cells
+  var svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('width', COLS*CELL);
+  svg.setAttribute('height', ROWS*CELL);
+  svg.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;';
+  wrap.appendChild(svg);
+  gridSvg = svg;
+  host.appendChild(wrap);
+  // worker strip: exactly one cell per worker
+  var wh = document.getElementById('workerGrid');
+  wh.innerHTML = '';
+  var strip = document.createElement('div');
+  strip.style.display = 'inline-flex';
+  strip.style.gap = '3px';
+  for (var w = 0; w < NW; w++){
+    var wc = document.createElement('div');
+    wc.style.cssText = 'box-sizing:border-box;width:'+CELL+'px;height:'+CELL+'px;line-height:'+CELL+'px;'
+      + 'text-align:center;font-size:10px;font-weight:bold;border:1px solid #8f8f88;color:#fff;';
+    wc.textContent = String(w+1);
+    strip.appendChild(wc);
+    wCells.push(wc);
+  }
+  wh.appendChild(strip);
+  return true;
+}
+// Which spots have a work action in flight at tq. One pass over the log so
+// scrubbing stays cheap; in-flight cells get an underline, not a new colour.
+function busySpotsAt(tq){
+  var busy = {};
+  for (var i=0;i<actions.length;i++){
+    var a = actions[i];
+    if (a.type === 'idle') continue;
+    if (a.spot >= 1 && a.start <= tq && tq < a.end) busy[a.spot] = true;
+  }
+  return busy;
+}
+function paintGrids(){
+  var day = sliderDay();
+  var secs = dayToSec(day);
+  var busy = busySpotsAt(secs);
+  for (var k=0;k<gCells.length;k++){
+    var g = gCells[k];
+    if (g.i < 0) continue;
+    var st = spotStateAt(g.i, secs);
+    g.el.style.background = SPOT_FILL[st];
+    g.el.style.color = (st === SPOT_RIPE) ? '#fff' : '#333';
+    // thick border instead of an underline. outline draws outside the layout
+    // box entirely, so the cell keeps exactly the same size.
+    var work = !!busy[g.i+1];
+    g.el.style.outline = work ? '2px solid #2b2b2b' : 'none';
+    g.el.style.outlineOffset = work ? '-2px' : '0';
+  }
+  var names = [];
+  // blue line between the two cell centres for walks inside the current
+  // 0.1-day quantum, i.e. the same bucket the time slider reports
+  if (gridSvg){
+    while (gridSvg.firstChild) gridSvg.removeChild(gridSvg.firstChild);
+    var stepSec = STEP_DAY * CFG.tick;               // 0.1 day = 4s
+    var qStart = Math.floor(secs / stepSec) * stepSec;
+    var qEnd = qStart + stepSec;
+    for (var wi=0; wi<actions.length; wi++){
+      var a = actions[wi];
+      if (a.type !== 'walk' || a.from === undefined) continue;
+      if (a.end <= qStart || a.start >= qEnd) continue;
+      var g1 = gridRC(a.from), g2 = gridRC(a.spot-1);
+      var ln = document.createElementNS('http://www.w3.org/2000/svg','line');
+      ln.setAttribute('x1', g1.c*CELL + CELL/2); ln.setAttribute('y1', g1.r*CELL + CELL/2);
+      ln.setAttribute('x2', g2.c*CELL + CELL/2); ln.setAttribute('y2', g2.r*CELL + CELL/2);
+      ln.setAttribute('stroke', '#1565c0');
+      ln.setAttribute('stroke-width', '2');
+      ln.setAttribute('stroke-linecap', 'round');
+      gridSvg.appendChild(ln);
+    }
+  }
+  for (var w=0; w<NW; w++){
+    var q = workerAt(w, secs);
+    wCells[w].style.background = TASK_FILL[q.task];
+    // show the cell being worked, W while walking, ? while idle
+    var lbl = (q.task === 'idle') ? '?' : (q.task === 'walk' ? 'W' : String(q.pos+1));
+    wCells[w].textContent = lbl;
+    wCells[w].title = 'worker '+(w+1)+' - '+q.task+(q.task==='walk'?' (to spot '+(q.pos+1)+')':' at spot '+(q.pos+1));
+    names.push('w'+(w+1)+' '+(q.task==='walk'?'walking to spot ':'at spot ')+(q.pos+1)+(q.task==='idle'?' idle':''));
+  }
+  document.getElementById('timeVal').textContent =
+    'day '+day.toFixed(1)+'  ('+secs.toFixed(1)+'s)  '+names.join('   ');
+}
+function renderGridKey(){ buildGrids(); paintGrids(); }
+// ------------------------------------------------- viewport window
+// A fixed box sits over each chart showing where the time slider is. The box
+// never moves; the CHARTS scroll underneath it. Scrolling by hand is the
+// inverse: it drives the time slider, so the indicator always tells the truth.
+// The slider is in DAYS and starts at 1.0, so day 71.0 is exactly the moment
+// a spot sown on day 1 finishes growing. seconds = (day - 1) * tick.
+var LABEL_W = 90, autoUntil = 0, contentW = 0, IND_W = 100;
+function sliderDay(){ return parseFloat(document.getElementById('timeSlider').value) || 1; }
+function dayToSec(day){ return (day - 1) * CFG.tick; }
+// One pass sets both the scroll and the indicator. Normally the chart scrolls
+// so the current time sits dead centre and the indicator is exactly there. At
+// the two ends there is nothing left to scroll, so the clamp wins and the
+// indicator is released to wherever the time actually is, pinned inside the
+// visible chart area. Static in the middle, released only at d1 and the last day.
+function syncView(keepScroll, forceX){
+  var x = (forceX !== undefined) ? forceX : (LABEL_W + dayToSec(sliderDay()) * PX);
+  var pairs = [['workerScroll','workerWin'], ['plantScroll','plantWin']];
+  autoUntil = performance.now() + 150;
+  for (var i=0;i<pairs.length;i++){
+    var el = document.getElementById(pairs[i][0]), win = document.getElementById(pairs[i][1]);
+    var cw = el.clientWidth;
+    var centre = LABEL_W + (cw - LABEL_W) / 2;
+    var maxScroll = Math.max(0, contentW - cw);
+    if (!keepScroll){
+      var scroll = Math.max(0, Math.min(maxScroll, x - centre));
+      if (Math.abs(el.scrollLeft - scroll) > 0.5) el.scrollLeft = scroll;
+    }
+    var sv = el.scrollLeft;
+    // clamp the LINE's centre, not the hitbox's left edge: otherwise the 100px
+    // hitbox stops the drawn line 50px short of both ends of the chart
+    var cx = Math.max(LABEL_W, Math.min(cw, x - sv));
+    var sr = el.getBoundingClientRect(), pr = win.parentElement.getBoundingClientRect();
+    win.style.left   = (sr.left - pr.left + cx - IND_W / 2) + 'px';
+    win.style.top    = (sr.top - pr.top) + 'px';
+    win.style.width  = IND_W + 'px';
+    win.style.height = sr.height + 'px';
+  }
+}
+function dayAtChartCentre(el){
+  return 1 + (el.scrollLeft + LABEL_W + (el.clientWidth - LABEL_W) / 2 - LABEL_W) / (CFG.tick * PX);
+}
+function applyTime(){ syncView(); paintGrids(); }
+function setTimeFromScroll(el){
+  if (performance.now() < autoUntil) return;
+  var d = Math.round(dayAtChartCentre(el) / STEP_DAY) * STEP_DAY;
+  var sl = document.getElementById('timeSlider');
+  sl.value = String(Math.max(parseFloat(sl.min), Math.min(parseFloat(sl.max), d)));
+  paintGrids();
+}
+// Re-fit after a resize: the viewport centre moved without scrollLeft changing,
+// so both the scroll and the indicator must be recomputed.
+function reflow(){ syncView(); }
+// Drag the indicator to scrub. While the indicator is pinned (its fixed
+// position) the drag is RELATIVE, not absolute: the chart scrolls at a rate
+// proportional to how far the pointer sits from the line, so the line itself
+// never has to be grabbed precisely. Rate is continuous - it eases in and out
+// with the pointer rather than jumping on a threshold.
+var dragging = false, dragVel = 0, dragRAF = null, lastFrameT = 0, dragS = 0;
+var dragMode = 'vel', lastPointerX = 0, absAnchorX = 0, absAnchorDay = 0, velRamp = 1;
+var DRAG_GAIN = 24;                      // scroll px/sec per px of pointer offset
+var DEADZONE = 20;                       // px either side of the anchor that do nothing
+function dragFrame(ts){
+  if (!dragging) return;
+  if (!lastFrameT) lastFrameT = ts;
+  var dt = Math.min((ts - lastFrameT) / 1000, 0.05);   // cap after a stall
+  lastFrameT = ts;
+  var ws = document.getElementById('workerScroll'), ps = document.getElementById('plantScroll');
+  autoUntil = performance.now() + 150;
+  var cw = ps.clientWidth;
+  var centre = LABEL_W + (cw - LABEL_W) / 2;
+  var maxScroll = Math.max(0, contentW - cw);
+  var pxPerDay = CFG.tick * PX;
+  var sl = document.getElementById('timeSlider');
+  var lo = parseFloat(sl.min), hi = parseFloat(sl.max);
+
+  // PINNED MODE: the line is frozen mid-view, so the pointer's distance from
+  // the point where this mode began drives a scroll RATE. As soon as the scroll
+  // hits either end there is nothing left to rate, so the line is released...
+  if (dragMode === 'vel'){
+    var next = dragS + dragVel * dt;
+    if (next <= 0 || next >= maxScroll){
+      dragMode = 'abs';                   // ...and the drag becomes a true 1:1 pull
+      absAnchorX = lastPointerX;
+      // anchor on the day UNDER THE POINTER, not the day at centre, so the
+      // released line tracks the cursor exactly instead of trailing it by
+      // whatever the grab offset happened to be
+      var xUnder = dragS + (lastPointerX - ps.getBoundingClientRect().left);
+      absAnchorDay = Math.max(lo, Math.min(hi, 1 + (xUnder - LABEL_W) / pxPerDay));
+    } else {
+      dragS = next;
+    }
+  }
+
+  if (dragMode === 'vel'){
+    ws.scrollLeft = dragS; ps.scrollLeft = dragS;
+    var xTrue = dragS + centre;                       // exact, unquantised
+    var q = Math.round((1 + (xTrue - LABEL_W) / pxPerDay) / STEP_DAY) * STEP_DAY;
+    sl.value = String(Math.max(lo, Math.min(hi, q)));
+    syncView(true, xTrue);
+  } else {
+    // RELEASED MODE: no rate mechanics at all - the line follows the pointer 1:1
+    var day = absAnchorDay + (lastPointerX - absAnchorX) / pxPerDay;
+    sl.value = String(Math.round(Math.max(lo, Math.min(hi, day)) / STEP_DAY) * STEP_DAY);
+    syncView();
+    dragS = ps.scrollLeft;
+// Back inside the scrollable range? The line re-pins to centre, so the rate
+    // reference has to be re-anchored to the pointer's CURRENT position. Using
+    // the line's new centre here would read the pointer as being far to one
+    // side and fire the scroll straight back off the edge.
+    // The tolerance must exceed one slider step in pixels: the day is quantised
+    // to 0.1, so at either end the recomputed scroll lands a fraction of a step
+    // SHORT of the clamp. Without the tolerance that reads as "interior",
+    // flips straight back to vel, and the line pins there permanently.
+    var tolPx = STEP_DAY * pxPerDay;
+    if (dragS > tolPx && dragS < maxScroll - tolPx){ dragMode = 'vel'; velRefX = lastPointerX; }
+  }
+  paintGrids();
+  dragRAF = requestAnimationFrame(dragFrame);
+}
+function initIndicatorDrag(){
+  var pairs = [['workerScroll','workerWin'], ['plantScroll','plantWin']];
+  for (var i=0;i<pairs.length;i++){
+    (function(elId, winId){
+      var win = document.getElementById(winId);
+      win.addEventListener('pointerdown', function(e){
+        e.preventDefault();
+        pausePlay();
+        dragging = true; dragVel = 0; lastFrameT = 0; dragMode = 'vel'; velRamp = 1;
+        lastPointerX = e.clientX;
+        dragS = document.getElementById('plantScroll').scrollLeft;
+        try { win.setPointerCapture(e.pointerId); } catch(err){}
+        dragRAF = requestAnimationFrame(dragFrame);
+      });
+      win.addEventListener('pointermove', function(e){
+        lastPointerX = e.clientX;
+        if (!dragging) return;
+        var off = lastPointerX - velRefX;                // distance from the anchor
+        var mag = Math.abs(off);
+        var eff = mag > DEADZONE ? mag - DEADZONE : 0;  // deadzone: no motion at all
+        dragVel = (off < 0 ? -eff : eff) * DRAG_GAIN;    // proportional beyond it
+      });
+      var end = function(e){
+        if (!dragging) return;
+        dragging = false; dragVel = 0;
+        if (dragRAF) cancelAnimationFrame(dragRAF);
+        dragRAF = null;
+        try { win.releasePointerCapture(e.pointerId); } catch(err){}
+      };
+      win.addEventListener('pointerup', end);
+      win.addEventListener('pointercancel', end);
+    })(pairs[i][0], pairs[i][1]);
+  }
+}
+function renderAll(){
+  renderTimeRuler();
+  renderGridKey();
+  // window height follows the content: one row per worker / per spot.
+  // +3px covers the container borders so the last row is never clipped.
+  document.getElementById('workerScroll').style.height = (AXIS_H + NW*ROW_H_WORKER + 3) + 'px';
+  document.getElementById('plantScroll').style.height  = (AXIS_H + N*ROW_H_PLANT + 3) + 'px';
+  // no trailing slack: syncView releases the indicator at the ends instead
+  contentW = LABEL_W + CFG.simDays*CFG.tick*PX;
+  var W = contentW;
+  // workers
+  var cw = document.getElementById('workerGantt');
+  cw.innerHTML=''; cw.style.width=W+'px';
+  makeAxis(cw, W);
+  for (var w=0; w<NW; w++){
+    var row = document.createElement('div');
+    row.className='row'; row.style.width=W+'px'; row.style.height=ROW_H_WORKER+'px';
+    var lab = document.createElement('span');
+    lab.className='rowlabel'; lab.textContent = 'worker '+(w+1); row.appendChild(lab);
+    actions.forEach(function(a){
+      if (a.w !== w) return;
+      var b = document.createElement('div');
+      b.className='bar';
+      b.style.left = (90 + a.start*PX)+'px';
+      b.style.width = Math.max(3,(a.end-a.start)*PX)+'px';
+      b.style.top='0px'; b.style.height=ROW_H_WORKER+'px'; b.style.background=COL[a.type];
+      b.title = a.type+' spot '+a.spot+' ('+coordLabel(a.spot-1)+')  '+secs2clock(a.start)+' -> '+secs2clock(a.end)+'  ('+(a.end-a.start).toFixed(3)+'s)';
+      row.appendChild(b);
+    });
+    cw.appendChild(row);
+  }
+  // plant rows, spot 1 at the bottom
+  var cp = document.getElementById('plantGantt');
+  cp.innerHTML=''; cp.style.width=W+'px';
+  makeAxis(cp, W);
+  // Plant rows are ordered by WHEN each spot was first sown, earliest at the
+  // bottom, so the field reads in the order it was actually planted. Ties fall
+  // back to spot number so the layout stays stable.
+  var firstSow = new Float64Array(N).fill(Infinity);
+  for (var q=0;q<N;q++)
+    for (var wq=0; wq<perSpot[q].length; wq++)
+      if (perSpot[q][wq].kind === 'sow'){ firstSow[q] = perSpot[q][wq].start; break; }
+  var rowOrder = [];
+  for (var q2=0;q2<N;q2++) rowOrder.push(q2);
+  rowOrder.sort(function(a,b){
+    if (firstSow[a] !== firstSow[b]) return firstSow[b] - firstSow[a];   // latest first = top
+    return a - b;
+  });
+  for (var ri=0; ri<N; ri++){
+    var s = rowOrder[ri];                       // rowOrder[0] is the TOP row
+    var row2 = document.createElement('div');
+    row2.className='row'; row2.style.width=W+'px'; row2.style.height=ROW_H_PLANT+'px';
+    // band alternate grid rows so the 2-D layout is readable
+    if (gridRC(s).r % 2 === 1) row2.style.background = '#f7f7f4';
+    if (gridRC(s).c === COLS-1) row2.style.borderRight = '1px solid #dcdcd8';
+    var lab2 = document.createElement('span');
+    lab2.className='rowlabel'; lab2.textContent='spot '+(s+1); row2.appendChild(lab2);
+    perSpot[s].forEach(function(sg){
+      function add(l,r,col,title,bd){
+        var rr = (r==null) ? endT : r;
+        if (rr<=l) return;
+        var b=document.createElement('div');
+        b.className='bar';
+        b.style.left=(90+l*PX)+'px';
+        // floor the width so a 2.567s sow never collapses into the growing bar
+        b.style.width=Math.max(5,(rr-l)*PX)+'px';
+        b.style.top='0px'; b.style.height=ROW_H_PLANT+'px'; b.style.background=col; b.title=title;
+        if (bd) b.style.border=bd;
+        row2.appendChild(b);
+      }
+      if (sg.kind==='plow') add(sg.start, sg.end, COL.plow, 'plow spot '+(s+1)+' '+coordLabel(s)+' '+secs2clock(sg.start));
+      if (sg.kind==='sow'){
+        var off = sg.end - sg.sownTick*CFG.tick;
+        add(sg.start, sg.end, COL.sow, 'sow spot '+(s+1)+' '+coordLabel(s)+' finished '+secs2clock(sg.end)+' - tick '+(sg.sownTick+1)+' offset '+off.toFixed(2)+'s (offset is discarded by tick-based growth)');
+        var wait = sg.ready - sg.end;
+        add(sg.end, sg.ready, '#b8e6b8', 'growing '+CFG.growTicks+' ticks -> ripe '+secs2clock(sg.ready)+' (start of tick '+(sg.ready/CFG.tick+1)+'). Real wait '+wait.toFixed(2)+'s = '+(wait/CFG.tick).toFixed(3)+' tick-equivalents. Growth starts exactly here, when the sow finished.');
+        if (sg.harvStart!==undefined){
+          if (sg.harvStart > sg.ready) add(sg.ready, sg.harvStart, COL.ripeWait, 'ripe-wait '+(sg.harvStart-sg.ready).toFixed(3)+'s - ripe since '+secs2clock(sg.ready)+' (d'+(sg.ready/CFG.tick+1)+'), worker busy elsewhere', '1px solid #8c8c8c');
+          add(sg.harvStart, sg.harvEnd, COL.harvest, 'harvest spot '+(s+1)+' '+coordLabel(s));
+        }
+      }
+    });
+    cp.appendChild(row2);
+  }
+  document.getElementById('zoomLabel').textContent = PX.toFixed(2)+' px/s';
+  var zs=document.getElementById('zoomSlider'); if (zs && document.activeElement!==zs) zs.value=String(PX);
+}
+
+// ---------------------------------------------------------------- controls
+var syncing=false;
+// Re-fit after a resize: the indicator must keep pointing at the slider's
+// time, and a resize changes the viewport centre without touching scrollLeft,
+// so the charts have to be re-centred too.
+function reflow(){ syncView(); }
+function linkScroll(){
+  var ws=document.getElementById('workerScroll'), ps=document.getElementById('plantScroll');
+  function mirror(from,to){
+    if (Math.abs(to.scrollLeft - from.scrollLeft) < 0.5) return;
+    autoUntil = performance.now() + 150;      // programmatic, don't treat as user scroll
+    to.scrollLeft = from.scrollLeft;
+  }
+  ws.addEventListener('scroll', function(){ mirror(ws,ps); setTimeFromScroll(ws); });
+  ps.addEventListener('scroll', function(){ mirror(ps,ws); setTimeFromScroll(ps); });
+  window.addEventListener('resize', reflow);
+  if (window.ResizeObserver){
+    var ro = new ResizeObserver(function(){ reflow(); });
+    ro.observe(ws); ro.observe(ps);
+  }
+}
+function setZoomCentered(v){
+  PX = Math.min(8, Math.max(0.05, v));
+  renderAll();
+  // content width changed, so re-centre on the current time and re-fit the line
+  reflow();
+}
+document.getElementById('zoomIn').onclick=function(){ setZoomCentered(PX*1.25); };
+document.getElementById('zoomOut').onclick=function(){ setZoomCentered(PX/1.25); };
+document.getElementById('zoomReset').onclick=function(){ setZoomCentered(1.2); };
+document.getElementById('zoomSlider').oninput=function(e){ setZoomCentered(parseFloat(e.target.value)); };
+
+function readNum(id, def, min, max){
+  var v = parseFloat(document.getElementById(id).value);
+  if (!isFinite(v)) v = def;
+  if (v < min) v = min;
+  if (v > max) v = max;
+  return v;
+}
+// Single source of truth for grid geometry. Both the full refresh() and the
+// shape-only preview call this, so what you see mid-drag cannot diverge from
+// what you get on release. Rows/Cols/grid label are all derived here.
+function applyLayout(){
+  var cap = plantsCap();
+  var nsl = document.getElementById('nSlider'), nnum = document.getElementById('nNum');
+  nsl.max = String(cap);
+  nnum.max = String(cap);
+  if (N > cap) N = cap;          // before COLS, which is derived from N
+  if (N < 1) N = 1;
+  var auto = autoRows(N);
+  var sl = document.getElementById('rowsSlider');
+  var sq = document.getElementById('makeSquare').checked;
+  sl.max = String(Math.max(30, auto));
+  if (sq){ ROWS = auto; sl.value = String(ROWS); }
+  else ROWS = Math.max(1, Math.round(readNum('rowsSlider', 2, 1, 500)));
+  COLS = Math.max(1, Math.ceil(N / ROWS));
+  document.getElementById('rowsVal').textContent = String(ROWS);
+  document.getElementById('colsOut').value = String(COLS);
+  document.getElementById('gridLabel').textContent =
+    COLS+' cols x '+ROWS+' rows = '+(ROWS*COLS)+' cells, '+(ROWS*COLS-N)+' spare, euclidean'+(sq?' (square)':'');
+  nnum.value = String(N);
+  if (document.activeElement !== nsl) nsl.value = String(Math.min(cap, Math.max(1, N)));
+}
+function refresh(){
+  CFG.tick    = readNum('tick', 40, 0.001, 10000);
+  CFG.plow    = readNum('plow', 5.905, 0.001, 10000);
+  CFG.sow     = readNum('sow', 2.567, 0.001, 10000);
+  CFG.harv    = readNum('harv', 2.289, 0.001, 10000);
+  CFG.growTicks = Math.round(readNum('growT', 70, 1, 10000));
+  CFG_YM = readNum('yieldMod', 1.15, 0, 1000);
+  CROP_BASEYIELD[70] = readNum('baseYieldBeetroots', 6, 0, 10000);
+  CROP_BASEYIELD[98] = readNum('baseYieldCarrots', 9, 0, 10000);
+  CROP_BASEYIELD[126] = readNum('baseYieldCabbages', 12, 0, 10000);
+  syncCrop();
+  CFG.walkSpd = readNum('walkSpd', 150, 1, 100000);
+  CFG.cmIdx   = readNum('cmIdx', 100, 0, 100000);
+  CFG.simDays = (document.getElementById('capUnit').value === 'y')
+    ? Math.round(readNum('capT', 3, 1, 60) * YEAR_DAYS)     // 1 year = 365 days
+    : Math.round(readNum('capT', 365, 1, 20000));
+  N   = Math.max(1, Math.round(readNum('nNum', 10, 1, 2000)));
+  // A family is two pairs of hands; a smallholding is three. The spinner counts
+  // families, everything downstream works in individual workers.
+  var famMult = document.getElementById('smallholding').checked ? 3 : 2;
+  families = Math.max(1, Math.round(readNum('nFamilies', 1, 1, 10)));
+  NW  = Math.max(1, Math.min(30, families * famMult));
+  var fh = document.getElementById('famHint');
+  if (fh) fh.textContent = '= ' + NW + ' worker' + (NW > 1 ? 's' : '');
+  var yh = document.getElementById('yieldHint');
+  if (yh) yh.innerHTML = N + ' plants \u00d7 ' + CFG_YM + ' \u00d7 ' + baseYield
+    + ' / 100 = ' + (N*CFG_YM*baseYield/100).toFixed(2) + ' \u2192 <b style="color:'+cropColor+'">'
+    + vegYield(N) + ' ' + cropName + '</b> per cycle';
+  applyLayout();
+  var pv0=document.getElementById('gridPreview'); if(pv0) pv0.style.display='none';
+  document.getElementById('timeSlider').max = String(CFG.simDays + 1);
+  runFull();
+}
+// simulate() is synchronous and blocks the main thread, so a spinner started
+// alongside it would never paint - the browser cannot repaint until simulate()
+// returns. The pill therefore has to be shown FIRST, then the work deferred by
+// a frame so the browser gets a chance to render it.
+//
+// A delayed-show timer does not work here: setTimeout cannot fire while the
+// main thread is blocked, so it would land after the work finished and flash
+// the pill on completion. Instead we learn from the PREVIOUS run - if the last
+// simulation was slow enough to be worth reporting, show the pill and yield;
+// otherwise run inline with no visual churn at all.
+var lastSimMs = 0, simRunning = false;
+function showProgress(on, txt){
+  var el = document.getElementById('simProgress');
+  if (!el) return;
+  if (txt) document.getElementById('simProgressTxt').textContent = txt;
+  el.style.display = on ? 'flex' : 'none';
+}
+function withProgress(fn){
+  if (simRunning) return;                 // never stack two simulations
+  if (lastSimMs < 80){                   // known-fast: no indicator, no flicker
+    var t0f = performance.now();
+    try { fn(); } finally { lastSimMs = performance.now() - t0f; }
+    return;
+  }
+  simRunning = true;
+  showProgress(true);
+  requestAnimationFrame(function(){
+    setTimeout(function(){
+      var t0 = performance.now();
+      try { fn(); }
+      finally {
+        lastSimMs = performance.now() - t0;
+        simRunning = false;
+        showProgress(false);
+      }
+    }, 0);
+  });
+}
+function runFull(){
+  withProgress(function(){ simulate(); renderAll(); syncView(); });
+}
+// SHAPE-ONLY refresh for slider drags. The grid's geometry is just N / rows /
+// cols, so it can be rebuilt without touching the simulation at all. Colours
+// are deliberately NOT refreshed: they read the lifecycle segments produced by
+// simulate(), and re-running it every drag frame is what made the sliders heavy.
+// Cells are painted neutral instead, then the real states arrive on release.
+function paintGridShape(){
+  for (var k=0; k<gCells.length; k++){
+    var g = gCells[k];
+    if (g.i < 0) continue;
+    g.el.style.background = SPOT_FILL[SPOT_BARE];
+    g.el.style.color = '#333';
+    g.el.style.outline = 'none';
+    g.el.style.outlineOffset = '0';
+  }
+  for (var w=0; w<wCells.length; w++){
+    wCells[w].style.background = TASK_FILL['idle'];
+    wCells[w].style.color = '#fff';
+    wCells[w].textContent = '?';
+    wCells[w].title = 'worker '+(w+1);
+  }
+  if (gridSvg) while (gridSvg.firstChild) gridSvg.removeChild(gridSvg.firstChild);
+}
+function liveGridShape(){
+  N = Math.max(1, Math.round(readNum('nNum', 10, 1, 2000)));
+  applyLayout();         // same geometry maths as refresh(), so COLS never lags
+  // Only repaint neutral + show the banner if the geometry actually moved.
+  // A change that leaves the grid alone (e.g. sim length) must not wipe the
+  // colours that are still perfectly valid.
+  var rebuilt = buildGrids();
+  if (rebuilt) paintGridShape();
+  var pv = document.getElementById('gridPreview');
+  if (pv) pv.style.display = rebuilt ? 'inline' : 'none';
+}
+// Sliders: 'input' fires every frame of a drag, so only the grids and the cheap
+// readouts update there. The simulation is fully re-run on 'change', i.e. when
+// the mouse is released.
+document.getElementById('rowsSlider').addEventListener('input', function(){
+  liveGridShape();
+});
+document.getElementById('rowsSlider').addEventListener('change', function(){ refresh(); });
+document.getElementById('makeSquare').addEventListener('change', function(){ refresh(); });
+var CROPS = {70:{name:'Beetroots', col:'rgb(110,0,150)'}, 98:{name:'Carrots', col:'rgb(220,110,0)'}, 126:{name:'Cabbages', col:'rgb(0,130,40)'}};
+document.getElementById('cropSelect').addEventListener('change', function(e){
+  document.getElementById('growT').value = e.target.value;   // crop sets Grow time
+  refresh();
+});
+['tick','plow','sow','harv','growT','walkSpd','cmIdx','capUnit',
+   'baseYieldBeetroots','baseYieldCarrots','baseYieldCabbages'].forEach(function(id){
+  document.getElementById(id).addEventListener('change', refresh);
+});
+// Spinner fields (number of plants, workers, sim length). Each arrow press
+// fires 'change', so refreshing straight away means one full simulation per
+// click. Instead: give instant shape feedback now, then simulate once the user
+// has been quiet for SIM_DEBOUNCE_MS. Clicking faster than that keeps pushing
+// the simulation back instead of restarting it.
+var SIM_DEBOUNCE_MS = 800, simTimer = null;
+function scheduleRefresh(){
+  liveGridShape();
+  if (simTimer) clearTimeout(simTimer);
+  simTimer = setTimeout(function(){ simTimer = null; refresh(); }, SIM_DEBOUNCE_MS);
+}
+['nNum','nFamilies','capT','yieldMod'].forEach(function(id){
+  document.getElementById(id).addEventListener('change', scheduleRefresh);
+});
+// A checkbox toggle is one deliberate action, so it refreshes immediately
+// rather than waiting out the spinner debounce.
+document.getElementById('smallholding').addEventListener('change', refresh);
+document.getElementById('nSlider').addEventListener('input', function(e){
+  document.getElementById('nNum').value = e.target.value;
+  document.getElementById('nLabel').textContent = e.target.value + ' spots';
+  liveGridShape();
+});
+document.getElementById('nSlider').addEventListener('change', function(e){
+  document.getElementById('nNum').value = e.target.value; refresh();
+});
+// ------------------------------------------------- time slider playback
+// Playback baseline 1x = real time = 1/40 day per second (a day tick lasts
+// 40s). A multiplier M advances M/40 day per second, which is expressed as
+// 0.1-day steps every 4000/M milliseconds:
+//     8x  -> 8/40  = 0.2 day/s  -> 0.1 day every 500ms
+//    40x  -> 40/40 = 1.0 day/s  -> 0.1 day every 100ms
+// Starting one stops the other. VIEW only - never re-simulates.
+var PLAY_CFG = {
+  play40x: {label:'\u25B6 40x', mult: 40},
+  play8x:  {label:'\u25B6 8x',  mult: 8}
+};
+var playing = false, playTimer = null, activeBtn = null;
+function setPlayLabels(){
+  for (var k in PLAY_CFG){
+    var b = document.getElementById(k);
+    if (b) b.textContent = (playing && activeBtn === k) ? '\u23F8' : PLAY_CFG[k].label;
+  }
+}
+function startPlay(key){
+  if (playing && activeBtn === key) return pausePlay();
+  pausePlay();
+  var cfg = PLAY_CFG[key];
+  var interval = 4000 / cfg.mult;                 // ms between 0.1-day steps
+  var sl = document.getElementById('timeSlider');
+  if ((parseFloat(sl.value) || 0) >= parseFloat(sl.max)) sl.value = sl.min;
+  activeBtn = key; playing = true;
+  setPlayLabels();
+  playTimer = setInterval(function(){
+    var s = document.getElementById('timeSlider');
+    var v = (parseFloat(s.value) || 0) + 0.1;      // one 0.1-day step
+    var max = parseFloat(s.max);
+    if (v >= max){ s.value = String(max); applyTime(); pausePlay(); return; }
+    s.value = String(v);
+    applyTime();
+  }, interval);
+}
+function pausePlay(){
+  playing = false;
+  if (playTimer !== null){ clearInterval(playTimer); playTimer = null; }
+  activeBtn = null;
+  setPlayLabels();
+}
+function stepDay(dir){
+  var sl = document.getElementById('timeSlider');
+  var min = parseFloat(sl.min), max = parseFloat(sl.max);
+  var v = (parseFloat(sl.value) || min) + dir * STEP_DAY;
+  sl.value = String(Math.max(min, Math.min(max, Math.round(v / STEP_DAY) * STEP_DAY)));
+  applyTime();
+}
+// one-time wiring: listeners live OUTSIDE refresh() so they cannot pile up
+document.getElementById('timeSlider').addEventListener('input', applyTime);
+// touching the slider pauses playback
+document.getElementById('timeSlider').addEventListener('pointerdown', pausePlay);
+document.getElementById('timeSlider').addEventListener('keydown', pausePlay);
+document.getElementById('stepFwd').addEventListener('click', function(){ stepDay(+1); });
+document.getElementById('stepBack').addEventListener('click', function(){ stepDay(-1); });
+document.getElementById('play40x').addEventListener('click', function(){ startPlay('play40x'); });
+document.getElementById('play8x').addEventListener('click', function(){ startPlay('play8x'); });
+refresh();
+linkScroll();
+initIndicatorDrag();
+document.getElementById('note').innerHTML =
+  '<b>Real time vs tick time.</b> The worker timeline is drawn in real seconds, so a 2.289s harvest or a 5.905s plow can land '+
+  'part-way through a 40s tick window and spill across the tick edge &mdash; the worker never stops for a tick boundary. '+
+  '<b>Growth is tick based instead:</b> a spot ripens on a tick boundary '+CFG.growTicks+' ticks after the tick its sow finished in, '+
+  'so the sub-tick offset of the sow is thrown away. It is <b>'+CFG.growTicks+' ticks</b> on the game clock in every case &mdash; '+
+  'only the wall-clock duration moves, between '+growSecondsMin().toFixed(0)+'s and '+growSecondsMax().toFixed(0)+'s. '+
+  'Every ripe edge therefore lands exactly on a tick boundary (tooltip reads <code>dX +0.0s</code>) while the labour bars sit at arbitrary offsets. '+
+  'Hover a sow bar for the discarded offset, and a growing bar for the realised wall-clock wait.';
+</script>
+<div id="simProgress" role="status" aria-live="polite"><span class="spin"></span><span id="simProgressTxt">Simulating&hellip;</span></div>
+</body>
+</html>
