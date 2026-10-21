@@ -1,9 +1,12 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- v3: fork of gantt_v2.html as of the end of v2. Advanced bed splitting gets
+     rebuilt here from scratch; v2 is the known-good single-bed build. -->
+
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Worker Gantt - tick/real-time plant sim</title>
+<title>MLTC Veg Sim</title>
 <style>
   body { font-family: Arial, sans-serif; margin: 16px; background: #f6f6f2; color: #222; }
   h1 { font-size: 18px; margin: 0 0 4px 0; }
@@ -64,10 +67,20 @@
   details.consider { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; margin: 0 0 14px 0; }
   details.consider > summary { cursor: pointer; font-size: 13px; font-weight: bold; color: #333; }
   details.consider .cbody { font-size: 12.5px; color: #444; line-height: 1.6; margin-top: 8px; }
+/* The considerations table: one row per modelled (or deliberately not modelled) effect. */
+  table.cons { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12.5px;
+    line-height: 1.5; color: #333; }
+  table.cons th, table.cons td { border: 1px solid #ddd; padding: 4px 7px; text-align: left;
+    vertical-align: top; }
+  table.cons th { background: #f4f4f0; font-weight: bold; }
+  table.cons th:nth-child(1) { width: 15%; }
+  table.cons th:nth-child(2) { width: 11%; }
+  table.cons th:nth-child(3) { width: 48%; }
+  table.cons th:nth-child(4) { width: 26%; }
   .ceil { margin: 6px 0 0 0; padding-left: 18px; }
   .ceil li { margin-bottom: 5px; }
-/* Limits and Recommendations holds only the Find limit button: the sweep it starts
-   reports back through the plot below. */
+/* The Find limit button sits in the shmoo's own header (limitFitBlock), not under a
+   heading of its own. */
   .floatgrp { position: sticky; top: 0; z-index: 40; background: #f6f6f2;
     box-shadow: 0 3px 8px rgba(0,0,0,.14); }
   .floatgrp .inFloat { margin-bottom: 8px; }
@@ -94,77 +107,97 @@
   <summary>Simulation considerations</summary>
   <div class="cbody">
     <div class="hint" style="margin-bottom:6px">These are all the considerations made in the modelling of the simulation to make it as true to the game as possible.</div>
-    <b>Time.</b> Labour is tracked in continuous <b>real seconds</b>; the calendar runs in <b>day ticks</b> of 40s.
-    An action may straddle a tick edge &mdash; the worker never waits for one.
-    <b>Growth is tick based, not time based:</b> a spot ripens on a tick boundary a fixed number of day ticks after the tick its
-    sow finished in, so the sub-tick offset of the sow is discarded and the ripe edge always lands on a boundary.
-    <br><br>
-    <b>The spot cycle.</b> EMPTY &rarr; plow &rarr; PLOWED &rarr; sow &rarr; GROWING &rarr; (grow time) &rarr; RIPE &rarr; harvest &rarr; EMPTY.
-    Growth is always the full grow time in day ticks on the game clock; only the wall-clock wait varies, by less than one tick, with the sow offset.
-    <br><br>
-    <b>Workers.</b> The Family(s) control shifts workers: two per family, three per family under Smallholding.
-    Each worker carries its own clock, so several work different spots at the same time.
-    <br><br>
-    <b>Task priority, highest first:</b> the walk to drop loot, then the refuel house chore, then harvest, then sow,
-    then plow. The drop-loot walk is not a queued choice at all: it is forced onto the worker that just harvested a
-    Golden Plant, so nothing can outrank it. The other four are picked by taking the task that can start soonest; when
-    two tasks can start at the same moment, priority decides, and a remaining tie is broken by the closest cell in
-    Euclidean distance. Priority therefore only arbitrates between tasks available at the same moment, so a worker
-    never sits idle while work exists. Walking is charged whenever a worker moves to another cell.
-    <br><br>
-    <b>Golden Plants and the shed.</b> Each spot's Golden status is fixed by the yield formula: the harvest
-    yield (plants &times; YieldMod &times; BaseYieldPer100Plants &divide; 100, rounded) decides how many spots
-    are Golden, and symmetric index-1 dithering picks which. Harvesting a Golden Plant sends that worker straight
-    to the shed &mdash; which in the simulation is a spot about five plant's distance away from Plant Spot 1 &mdash;
-    to drop loot before new work. The shed takes one drop at a time; more loot arrivals during an active drop have
-    wait in place, which the simulation detects as Clogging. In the game this can happen if you have too many workers
-    finding loot and going to the shed at the same time (4 family, smallholding, large plot, many granary workers
-    trying to retrieve loot from pantry etc). Granary workers are <b style="color:#b00">NOT modelled</b>.
-    <br><br>
-    <b>House chore: refueling.</b> Burgages need fuel monthly. When it needs refueling, a worker interrupts backyard
-    work to walk to a fuel source to collect. In this simulation, leaving the front door and returning with fuel is
-    modeled as &quot;Time to Refuel&quot;, measured in days. It is the day the fuel arrives that dates the next request:
-    the same day-of-month, in the next month. As a house chore, the request outranks every backyard task when it
-    competes for the same worker at the same moment; only the walk to drop loot sits above it, and that one is forced
-    onto the worker that just harvested. In this simulation, the chosen worker walks to the shed and waits there for
-    Time to Refuel days. Both the walk and the wait are counted as <b>idle</b>, never as work, and the worker grid
-    shows them as <b>C</b> on the idle color. Refuel chore continues in the winter. As of 0.8.104 the game keeps
-    refuel day as a strict day-of-month number with no handling for a day the next month does not have, so a short
-    month is skipped rather than clamped or rolled over. E.g. a 31st refuel waits for the next 31-day month
-    (February, April, June, September and November are passed over), and a 29th, 30th or 31st in January goes
-    straight to March. This bug is also modeled in the simulation.
-    <br><br>
-    <b>Calendar.</b> A year is 365 days and February is always 28 days. The run starts on 01 Mar, so the first
-    calendar year is simulated only from March onwards and is a partial year by design; partial years are left out
-    of the averages. Within a year the last 90 days (01 Dec &ndash; 28 Feb) are <b>winter</b>: no labour, but
-    growth continues, so autumn crops ripen and wait for spring. Winter is excluded from all percentages and idle
-    reporting.
-    <br><br>
-    <b>Field layout.</b> A near-square grid filled row-first from the bottom-left: the index runs left to right
-    along each row, then the next row up. No snake fill. Walking is between cell
-    centres, never by spot index. The shed square sits at the same lattice level.
-    <br><br>
-    <b>Crop yield, not harvest count.</b> The simulation counts harvest actions. To get the vegetable count,
-    multiply by YieldMod and BaseYieldPer100Plants, divide by 100, and round; the per-year table shows both.
-    <br><br>
-    <b>The ceilings.</b> Averaged Worker Output is measured from the run, over complete non-Y1 years.
-    There is no formula-derived ceiling anywhere on this page. The Find limit sweep answers the same
-    question by measurement instead: it runs the whole setup again across a range of plant counts and
-    reports the best output it finds, so a ceiling here always comes from a run that actually happened.
-    <br><br>
-    <b>Datamined values.</b> See the Datamined game values section below. It holds the game's clock and labour
-    constants &mdash; Day Tick Duration, Plow, Sow, Harvest, Drop Loot and Grow time in day ticks &mdash; the movement
-    constants, Walk speed and cm per grid cell, and BaseYieldPer100Plants for each crop. Everything else in this
-    page (spot counts, workers, YieldMod, Time to Refuel) is a modelling choice rather than a game value. The
-    calendar is the exception: its year length, its 28-day February and its winter span are faithful to the game.
-    <br><br>
-    <b style="color:#b00">Not modelled</b>: worker pathfinding or collisions, tool quality, weather, stamina, and the shed's
-    capacity as a logistics node beyond the single-drop constraint already described.
-    Two workers may briefly converge on the same square since there is no collision model.
-    <br><br>
-    <b style="color:#b00">Miscellaneous activity, also not modelled</b>: water collection from water wells, workers randomly stopping
-    work to stretch their body or yawn, going for a drink, or going to pray. These are left out because they are
-    either lower priority tasks than backyard work or cost very little time, or both.
+    <b>Game Version.</b> 0.8.104
+    <table class="cons">
+      <thead><tr><th>Variable</th><th>Impact</th><th>How it works in game</th><th>How it is simulated</th></tr></thead>
+      <tbody>
+        <tr><td>Workers</td><td>Neutral</td><td>Two backyard workers per family (Wife, Son). Husband never does
+        backyard work. All three if family is a Smallholding.</td><td>Exactly</td></tr>
+        <tr><td>Time</td><td>Neutral</td><td>At 1x speed, a calendar day ticks over every x seconds. It doesn't
+        matter if a plant is sowed at the beginning or just before a day tickover, it will need a fixed number of
+        ticks to be ready for harvest (see Datamined game values for the exact number, depending on the crop.
+        Every worker action has an animation time in seconds that I managed to datamine from the game, including
+        walking speed.</td><td>Exactly</td></tr>
+        <tr><td>Plant Spot Cycling</td><td>Neutral</td><td>An empty plant spot must be Plowed, only then can it
+        be Sowed, only then can it Grow, only then can it be Harvested.</td><td>Exactly</td></tr>
+        <tr><td>Task Priority</td><td>Neutral</td><td>From highest priority to lowest: A worker holding a basket
+        of veggie must go to the shed to drop it off. If there is a burgage chore (refuel/re-water) one backyard
+        worker must step away from the backyard to do it. A plant spot that is ready to harvest must be
+        harvested. A spot that is Plowed but not Sown must be Sown. A spot that is empty must be Plowed. If there
+        are multiple plant spots at the same priority, the closest one will be matched to an available idle
+        worker. Last and lowest priority is an outside job like the family's assigned job, guiding an ox, getting
+        a drink, going to pray, etc.</td><td>Exactly</td></tr>
+        <tr><td>No reassignment on dispatch</td><td>Negative</td><td>A worker that is assigned a task some
+        distance away will have to walk but will not be reassigned a nearer, closer, or higher priority task
+        midwalk until the original assigned task is done (reserved on dispatch rule). This means if a worker who
+        just Harvested the only plant in the vicinity which was ready to harvest in the moment and they should
+        ideally stick around to wait for the others to ripen, they instead walk away to do Plowing and Sowing
+        somewhere else, according to the Task Priority mechanic. Since Plowing and Sowing work are often far away
+        from ripening spots, and workers don't know in advance if there are more that will ripen in succession if
+        they just wait a few more seconds, this often leads to workers playing whack-a-mole and incurring lots of
+        unnecessary walking. Also, if no more backyard tasks are available (e.g. all spots already Plowed, Sowed
+        and Growing but none ready for Harvest), they become liable to be assigned to leave the plot for low
+        priority outside tasks. Once assigned to leave, they will go do that first, even if some plant spots
+        suddenly become available to Harvest a split second later.</td><td>Exactly</td></tr>
+        <tr><td>Return loot to shed</td><td>Negative</td><td>A worker doing a string of Harvests occasionally
+        ends up with a basket in hand that they must return to the shed with to drop off. This was reintroduced in
+        0.8.078 and significantly impacts production.</td><td>Exactly. See Golden Plants.</td></tr>
+        <tr><td>Clogging</td><td>Negative</td><td>A veggie shed has capacity to hold only 1 person acting at a
+        time. For large family plots, multiple workers may clog at the shed while waiting for the first one to
+        drop their loot. Granary workers have a very long animation time when unloading a shed and can also clog
+        it.</td><td>Approximate. Backyard worker clogging themselves is simulated but the impact has been
+        determined to be negligible. (except been for 4 family plots. Granary worker clogging is NOT
+        SIMULATED.</td></tr>
+        <tr><td>Golden Plants &amp; Veg Yield formula</td><td>Emergent, Probably Neutral</td><td>Not every
+        harvested plant leads to gaining 1 vegetable creating the basket in hand. Loot is gained via statistical
+        mechanic determined at the time of backyard creation, assigning certain plant spots with Golden status
+        (my terminology). Each spot's Golden status is fixed by the yield formula: Y (= number of plants *
+        YieldMod * BaseYieldPer100Plants * 100, rounded) which decides how many plant spots are Golden, then
+        symmetric index-1 dithering picks which spots exactly. This is on average identical to having a dice
+        roll every time any particular spot is harvested like how some games do it, but the way Manor Lords does
+        it significantly reduces CPU usage. Harvesting a Golden Plant sends that worker straight to the shed to
+        drop the loot before any new task can be assigned.</td><td>Exactly</td></tr>
+        <tr><td>Burgage chores</td><td>Negative</td><td>Burgages need fuel monthly. When it needs refueling, a
+        worker interrupts backyard work to walk to a fuel source to collect. In this simulation, leaving the
+        front door and returning with fuel is modeled as "Time to Refuel", measured in days. It is the day the
+        fuel arrives that dates the next request: the same day-of-month, in the next month. As a house chore, the
+        request outranks every backyard task when competing for an available worker. Burgages also need water
+        monthly, so a backyard worker needs to visit a well. Husband does not do house chores.</td><td>available
+        worker assigned to chore walks to the shed and waits there for Time to Refuel days, which has a
+        reasonable preset number by default that the user can change. The first-ever chore day also has an
+        adjustable preset. Both the walk and the wait are counted as idle, and the worker grid shows them as C on
+        the idle color. Chores continue in the winter. Last checked for 0.8.104, the game keeps refuel day as a
+        strict day-of-month number.</td></tr>
+        <tr><td>Calendar &amp; Winter Plant Spot Utilization%</td><td>Emergent</td><td>A year is 365 days and
+        February is always 28 days. The run starts on 01 Mar, so the first calendar year is simulated only from
+        March onwards and is a partial year by design; partial years are left out of the averages. Within a year
+        the last 90 days (01 Dec - 28 Feb) are Winter: no backyard labor allowed but burgage chores, but Growth
+        continues. The output of a veggie plot is significantly impacted by how well the backyard is Sown to take
+        advantage of the 90 day Grow-only period. I call this the Winter Plant Spot Utilization %. The exact
+        relation is an emergent property and therefore must be simulated.</td><td>Exactly</td></tr>
+        <tr><td>Field layout</td><td>Emergent</td><td>Every plant has 100 cm separation distance, with some
+        jitter. The backyard has the plants split up into three planter beds with rows separating them
+        approximately 500 cm wide for the middle splitter road and 300 cm for the horizontal splitter. The shed
+        distance to the nearest plant appears to be related to the length of the plot. The veggie plot output is
+        significantly impacted by how well the plant spots are distributed with respect to the location of the
+        shed due to whack-a-mole effect and return-to-shed mechanics affecting total walk time. Clearly squarish
+        backyards are optimal and long ones less so, but the exact total walk time vs plot shape is an emergent
+        property and therefore must be simulated. Unfortunately I could not fully reverse-engineer the planter
+        bed generation so it's just square and rectangle backyards for now.</td><td>simulator in field layout
+        Advanced Mode does 3 planter beds with the shed closest to the bed holding ~50% of the plants. The other
+        two holding about 37% and 13%. User can set the width of the plot (Rows) and number of plants and let the
+        plot grow in length, or choose Make Square mode (default) to attempt the simulator try to form a square
+        backyard using the desired number of plants. I could not fully reverse-engineer the planter bed
+        generation so it's just square and rectangle backyards for now.</td></tr>
+        <tr><td>Pathfinding and collisions</td><td>Negative</td><td>Workers beeline to their intended location
+        and bump/stall if there is another person in the way.</td><td>Not simulated. Probably minor/not worth
+        simulating.</td></tr>
+        <tr><td>Miscellaneous activity</td><td>Negative</td><td>Workers sometimes randomly stop to stretch their
+        body or yawn, or if temporarily idle may go for a drink, or pray, which can have negative effects for
+        output if backyard tasks are incoming.</td><td>Not simulated. Probably minor/not worth
+        simulating.</td></tr>
+      </tbody>
+    </table>
   </div>
 </details>
 
@@ -225,22 +258,29 @@
   <h1 style="font-size:14px">Setup and view</h1>
 <div class="hint" style="margin-bottom:6px">Grid is filled row-first from spot 1 bottom-left: left to right along each row, then up. Walking is between cell centres, never by spot index.</div>
 <div class="toolbar">
-    <label for="rowsSlider">Row count (rows)</label>
-    <input id="rowsSlider" type="range" min="1" max="30" step="1" value="2" style="width:230px">
-    <span id="rowsVal" style="min-width:30px;font-weight:bold">2</span>
-    <label style="margin-left:10px;white-space:nowrap"><input id="makeSquare" type="checkbox"> Make Square</label>
-    <label for="colsOut" style="margin-left:14px">Columns</label>
-    <input id="colsOut" type="number" value="5" min="1" max="500" step="1" style="width:60px;background:#f2f2f0" readonly>
-    <span id="gridLabel" class="hint"></span>
-  </div>
-  <div class="toolbar">
     <label for="cropSelect"><b>Crop:</b></label>
     <select id="cropSelect" style="font-size:13px;font-weight:bold">
       <option value="70" style="color:rgb(110,0,150)">Beetroots</option>
       <option value="98" style="color:rgb(220,110,0)">Carrots</option>
       <option value="126" style="color:rgb(0,130,40)">Cabbages</option>
     </select>
-    <label for="nSlider" style="margin-left:14px"><b>Number of Plants</b></label>
+    <label for="yieldMod" style="margin-left:14px" title="Yield multiplier for vegetable backyard as reported in burgage General Tab under &quot;Efficiency&quot;.">YieldMod</label>
+    <input id="yieldMod" type="number" value="1.16" min="0" step="0.01" style="width:76px"
+      title="Yield multiplier for vegetable backyard as reported in burgage General Tab under &quot;Efficiency&quot;.">
+    <span class="hint" id="yieldHint"></span>
+  </div>
+  <div class="toolbar">
+    <label style="margin-left:10px;white-space:nowrap"><input id="advancedMode" type="checkbox" checked> Advanced Mode</label>
+    <label style="margin-left:14px;white-space:nowrap"><input id="makeSquare" type="checkbox" checked> Make Square</label>
+    <label for="rowsSlider" style="margin-left:14px">Row count (rows)</label>
+    <input id="rowsSlider" type="range" min="10" max="50" step="1" value="10" style="width:230px">
+    <span id="rowsVal" style="min-width:30px;font-weight:bold">10</span>
+    <label for="colsOut" style="margin-left:14px">Columns</label>
+    <input id="colsOut" type="number" value="5" min="1" max="500" step="1" style="width:60px;background:#f2f2f0" readonly>
+    <span id="gridLabel" class="hint"></span>
+  </div>
+  <div class="toolbar">
+    <label for="nSlider"><b>Number of Plants</b></label>
     <input id="nSlider" type="range" min="50" max="1000" step="1" value="50" style="width:200px">
     <input id="nNum" type="number" min="50" max="1000" step="1" value="50" style="width:76px">
     <span id="nLabel" class="hint"></span>
@@ -254,13 +294,18 @@
     <input id="capT" type="number" min="1" max="20000" step="1" value="3" style="width:76px">
   </div>
   <div class="toolbar">
-    <label for="yieldMod" title="Yield multiplier for vegetable backyard as reported in burgage General Tab under &quot;Efficiency&quot;.">YieldMod</label>
-    <input id="yieldMod" type="number" value="1.15" min="0" step="0.01" style="width:76px"
-      title="Yield multiplier for vegetable backyard as reported in burgage General Tab under &quot;Efficiency&quot;.">
-    <span class="hint" id="yieldHint"></span>
-    <label for="refuelDays" style="margin-left:14px" title="Round trip time for a worker to be sent out to collect fuel for the burgage plot. Fueling, the next refueling will be requested again on the same day of the next month. Round trip time of 3 days is about right for a storehouse one corpse pit away from the house. This simulator uses Day 15 as the first fueling.">Time to Refuel (days)</label>
+    <label for="refuelFirstDay" style="margin-left:10px" title="Day of the starting month on which the first fueling is requested. The starting month is March, so day 15 is 15 March. Later refuelings land every 'Time to Refuel' days, skipping any month too short for the day-of-month.">Refuel First Day</label>
+    <input id="refuelFirstDay" type="number" value="15" min="1" max="31" step="1" style="width:60px"
+      title="Day of the starting month on which the first fueling is requested. The starting month is March, so day 15 is 15 March. Later refuelings land every 'Time to Refuel' days, skipping any month too short for the day-of-month.">
+    <label for="refuelDays" style="margin-left:14px" title="Round trip time for a worker to be sent out to collect fuel for the burgage plot. Fueling, the next refueling will be requested again on the same day of the next month. Round trip time of 3 days is about right for a storehouse one corpse pit away from the house.">Time to Refuel (days)</label>
     <input id="refuelDays" type="number" value="5" min="0" step="0.5" style="width:76px"
-      title="Round trip time for a worker to be sent out to collect fuel for the burgage plot. Fueling, the next refueling will be requested again on the same day of the next month. Round trip time of 3 days is about right for a storehouse one corpse pit away from the house. This simulator uses Day 15 as the first fueling.">
+      title="Round trip time for a worker to be sent out to collect fuel for the burgage plot. Fueling, the next refueling will be requested again on the same day of the next month. Round trip time of 3 days is about right for a storehouse one corpse pit away from the house.">
+    <label for="rewaterFirstDay" style="margin-left:14px" title="Day of the starting month on which the first re-watering is requested. Mechanically identical to fueling - a worker walks to the house and waits - but with its own independent schedule.">Re-Water First Day</label>
+    <input id="rewaterFirstDay" type="number" value="3" min="1" max="31" step="1" style="width:60px"
+      title="Day of the starting month on which the first re-watering is requested. Mechanically identical to fueling - a worker walks to the house and waits - but with its own independent schedule.">
+    <label for="rewaterDays" style="margin-left:14px" title="Round trip time for a worker to be sent out to re-water the burgage plot. Same mechanic as fueling, separate timer.">Time to Re-water (days)</label>
+    <input id="rewaterDays" type="number" value="5" min="0" step="0.5" style="width:76px"
+      title="Round trip time for a worker to be sent out to re-water the burgage plot. Same mechanic as fueling, separate timer.">
   </div>
 </div>
 
@@ -268,7 +313,7 @@
   <h1 style="font-size:14px">Burgage Plot</h1>
   <div style="display:flex;flex-direction:column;gap:12px;margin-top:4px">
     <div>
-      <div style="font-size:11px;color:#666;margin-bottom:3px">Worker grid &mdash; one cell per worker: spot number, <b>W</b> walking, <b>C</b> house chore, <b>?</b> idle</div>
+      <div style="font-size:11px;color:#666;margin-bottom:3px">Worker grid &mdash; one cell per worker: spot number, <b>W</b> walking, <b>C</b> refuel trip, <b>R</b> re-water trip, <b>?</b> idle</div>
       <div id="workerGrid"></div>
       <div class="legend" style="margin-top:5px">
         <span><span class="sw sq" style="background:#8B4513"></span>plowing</span>
@@ -277,7 +322,8 @@
         <span><span class="sw sq ld" style="background:#1565c0">W</span>walking</span>
         <span><span class="sw sq ld" style="background:#7cc4f2">D</span>drop loot</span>
         <span><span class="sw sq ld" style="background:#c0392b">X</span>clogging</span>
-        <span><span class="sw sq ld" style="background:#dcdcdc;border:1px solid #bbb;color:#333">C</span>house chore (idle)</span>
+        <span><span class="sw sq ld" style="background:#dcdcdc;border:1px solid #bbb;color:#333">C</span>refuel trip (idle)</span>
+        <span><span class="sw sq ld" style="background:#e8e2d4;border:1px solid #bbb;color:#333">R</span>re-water trip (idle)</span>
         <span><span class="sw sq ld" style="background:#dcdcdc;border:1px solid #bbb;color:#333">?</span>idle</span>
       </div>
     </div>
@@ -326,7 +372,7 @@
       <span><span class="sw" style="background:#1565c0"></span>walk</span>
       <span><span class="sw" style="background:#7cc4f2"></span>drop loot</span>
       <span><span class="sw" style="background:#c0392b"></span>clogging</span>
-      <span><span class="sw" style="background:#ddd"></span>idle <span style="color:#666">(incl. house chore, C in the worker grid)</span></span>
+      <span><span class="sw" style="background:#ddd"></span>idle <span style="color:#666">(incl. house chores, C and R in the worker grid)</span></span>
       <span><span class="sw" style="background:#ddd"></span>winter (header cells only, d276&ndash;365)</span>
     </div>
     <div class="wtscroll"><div class="chartwin">
@@ -359,7 +405,8 @@
   <div class="cbody" id="profileBody">run a change to populate this</div>
 </details>
 
-<script>
+<script id="appscript">
+//==WORKER-CORE-BEGIN==
 // ---------------------------------------------------------------- state
 var CFG = { tick:40, plow:5.905, sow:2.567, harv:2.289, growTicks:70,
             walkSpd:150, cmIdx:100, simDays:365 };
@@ -373,7 +420,13 @@ var YEAR_DAYS = 365, GROW_DAYS = 275;
 // day-of-year (simDay + CAL_OFFSET). Months are needed for the monthly house
 // chore, which is requested on the same day number of every calendar month.
 var CAL_OFFSET = 59;                                        // Jan 31 + Feb 28
+// Re-Water is a second house chore with the same mechanic as Fueling (walk to the
+// house, wait, return) but its OWN independent schedule. Both first-days are
+// user-settable and default as shown; the starting month is March, so day 3 of the
+// starting month is 03 March. Both lists skip months too short for the day-of-month,
+// mirroring how the game treats refuel_day as a strict day-of-month number.
 var REFUEL_FIRST_DAY = 15;                                  // day 15 of the starting month
+var REWATER_FIRST_DAY = 3;                                  // day 3 of the starting month
 var MONTH_DAYS = [31,28,31,30,31,30,31,31,30,31,30,31];    // Jan .. Dec
 var MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 // Days needed for the run to end on 31 Dec: the first one is 01 Mar -> 31 Dec,
@@ -389,6 +442,13 @@ function yearEndDaysAtLeast(d){
 function calLabel(simDay){
   var c = calDate(simDay);
   return (c.d < 10 ? '0' : '') + c.d + ' ' + MONTH_NAMES[c.m] + ' Y' + (c.y+1);
+}
+// '01 Mar' for a slider DAY (1-based, the units the time slider uses). The year is
+// dropped here because the readout already reads "Day N", and the plot spans years;
+// the full '14 Sep Y2' form is still available via calLabel() for the per-year tables.
+function calDayStr(day){
+  var c = calDate(Math.max(0, Math.round(day) - 1));
+  return (c.d < 10 ? '0' : '') + c.d + ' ' + MONTH_NAMES[c.m];
 }
 // 0-based sim day -> calendar date. m is 0 = Jan .. 11 = Dec, d is 1..31.
 function calDate(simDay){
@@ -447,11 +507,33 @@ var CROP_BASEYIELD = {70:6, 98:9, 126:12};
 var CROP_COLOR = {70:'rgb(110,0,150)', 98:'rgb(220,110,0)', 126:'rgb(0,130,40)'};
 // Turnover axis top per crop: a spot cannot turn over more crops in a year than the
 // crop allows, so unlike output this axis is fixed, not measured with headroom.
-var TURNOVER_MAX = {70:5.0, 98:4.0, 126:3.0};      // Beetroots, Carrots, Cabbages
-// Full-rate turnover per crop: a count turning over at this rate or better is earning
-// its keep. The Recommended Minimum is the largest count still at or above it -
-// deliberately lower than the axis top, which only frames the picture.
-var TURNOVER_FULL = {70:4.0, 98:3.0, 126:2.0};     // Beetroots, Carrots, Cabbages
+// The theoretical maximum turnover of ONE plant spot in a year.
+//
+// A spot that was still carrying a crop when the previous winter began gets its spring
+// harvest for free - that is the "+1". After that it runs a strict cycle of
+// plow -> sow -> grow -> harvest, repeated until the year runs out, and the next cycle
+// cannot start until the harvest that closed the last one is finished. So one cycle
+// costs plow + harvest + grow, and the spot fits floor(275/cycle) further cycles in a
+// working year. Sow is NOT in that sum: it is not on the critical path, because the
+// crew can sow the spot while the previous crop is still growing.
+//
+// This replaces a hardcoded {70:5.0, 98:4.0, 126:3.0}, which was wrong for two of the
+// three crops. The old numbers were only ever the axis top and were never checked
+// against a simulated run, which is how they survived review twice.
+function turnoverMax(){
+  var cycle = CFG.plow + CFG.harv + CFG.growTicks;
+  if (!(cycle > 0)) return 0;
+  return 1 + Math.floor(GROW_DAYS / cycle);
+}
+// Full-rate turnover per crop, in harvest actions per spot per year: a count turning over
+// at this rate or better is earning its keep, and Max Size with Peak Land Efficiency is the
+// largest count still at or above it.
+//
+// Cabbages sit at 2.5, between the 2 they fall to and the 3 a well-aligned cycle reaches.
+// Their cycle leaves only 6.61 days of slack in a 275-day working year, so a spot oscillates
+// between 2 and 3 rather than settling; 2.5 is the middle of what actually happens. The
+// other two crops have ample slack (151.7% and 59.0% of a cycle) and hold a steady rate.
+var PLE_TURNOVER = {70:4.0, 98:3.0, 126:2.5};     // Beetroots, Carrots, Cabbages
 // How many plants the yard can hold, per crop. These are absolute caps, not a
 // per-worker figure: the slider spans PLANT_MIN to the cap for the chosen crop.
 // Measured peaks, 2 to 8 workers (families 1-4), fixed rows, 3-year runs:
@@ -473,7 +555,15 @@ function plantMin(){ return PLANT_MIN; }
 // crew cannot work. Null means "no measured limit"; every new sweep and every crop
 // change clears it.
 var nSliderMaxCap = null;
-var CFG_YM = 1.15, cropName = 'Beetroots', baseYield = CROP_BASEYIELD[70], cropColor = CROP_COLOR[70];
+// The ceiling the plant-count controls are held to: a measured scan limit when one
+// exists, otherwise the crop's absolute cap. Every clamp has to go through here. A
+// sweep is not bounded by the crop cap - it climbs on the coarse grid until PPSU falls
+// away, which for some crop and crew can land ABOVE that cap - so clamping to
+// plantsCap() directly would quietly drag a measured limit back down to the cap, and
+// leave the slider, the number box and the current-setting line disagreeing with each
+// other.
+function plantCeil(){ return nSliderMaxCap || plantsCap(); }
+var CFG_YM = 1.16, cropName = 'Beetroots', baseYield = CROP_BASEYIELD[70], cropColor = CROP_COLOR[70];
 // Point the name, base yield and colour at whichever crop is selected. Called
 // whenever the crop dropdown or any of the three base-yield inputs changes.
 function syncCrop(){
@@ -577,44 +667,286 @@ var counters, grownSec, fillInfo;
 // i.e. 4 complete columns rather than 3. No snake fill.
 var COLS = 5, ROWS = 2, colsUser = false;
 function autoRows(n){ return Math.max(1, Math.ceil(Math.sqrt(n))); }
-// is this cell occupied? occupancy runs column by column, bottom-up
-function cellFilled(r, c){
-  return (c*ROWS + (ROWS - 1 - r)) < N;
+// The yard is THREE bed regions, not one rectangle, so occupancy can no longer be the
+// flat "column-major over 0..COLS-1" test it used to be.
+//
+//   bed 1  lower band, the original rectangle, columns 0..COLS-1
+//   bed 2a upper-left, left-justified so its first column sits on the shed's x
+//   bed 2b upper-right, reaching the same x-max as bed 1, and therefore shorter
+// Two gutters sit between them and are never occupied: the horizontal one between
+// band 1 and band 2, the vertical one between 2a and 2b. Both cost walk distance.
+
+
+
+
+
+
+
+
+
+
+
+// One pass builds the whole yard: cell -> spot index, and spot index -> cell. Cached on
+// the geometry, because gridRC() and cellFilled() are called per spot and would
+// otherwise rebuild this constantly.
+var LAYOUT = null, LAYOUT_SIG = '', BED2 = null, BED2_SIG = '';
+function layout(){
+  var sig = [N, COLS, ROWS, shedOffsetA(bed1ColsA()), ADV_MODE ? 1 : 0].join('|');
+  if (LAYOUT && sig === LAYOUT_SIG) return LAYOUT;
+  // Step 1 - which cells exist. Advanced Mode is three regions and two rifts; off, it is
+  // the single rectangle. PLANT FILL runs column by column, bottom to top, in both modes.
+  // INDEX FILL is step 2 and is row-major from the bottom-left, also in both modes.
+  // The two deliberately disagree; keeping them separate is what stops the numbering
+  // from depending on how the yard happens to be divided up.
+  var cells = [], c, r;
+  if (!advancedOn()){
+    for (c = 0; c < COLS; c++) for (r = ROWS-1; r >= 0; r--) cells.push({r:r, c:c});
+    if (cells.length > N) cells.length = N;
+  } else {
+    var b1r = bed2EndRow(), n1 = 0, na = 0, nb = 0;
+    var cap1 = bed1PlantsA(), capa = bed2aPlantsA(), capb = bed2bPlantsA();
+    // Bed 1: its own rectangle, its own share of the plants.
+    for (c = 0; c < COLS; c++) for (r = ROWS-1; r >= b1r; r--)
+      if (n1 < cap1){ cells.push({r:r, c:c}); n1++; }
+    // Bed 2a: left of the vertical rift, starting at the shed's x, filled left to right.
+    for (c = bed2C0(); c < vgC0(); c++) for (r = b1r-1; r >= 0; r--)
+      if (na < capa){ cells.push({r:r, c:c}); na++; }
+    // Bed 2b: exactly full, so it reaches both the gutter and bed 1's right edge.
+    var rb = bed2bRowsA();
+    for (c = bed2bC0(); c <= bed2bC1(); c++) for (r = rb-1; r >= 0; r--)
+      if (nb < capb){ cells.push({r:r, c:c}); nb++; }
+  }
+  // Step 2 - which spot number sits in each cell. Looks only at the finished grid.
+  cells.sort(function(a, b){ return b.r - a.r || a.c - b.c; });
+  var idx = {}, rc = [], i;
+  for (i = 0; i < cells.length; i++){ idx[cells[i].r + ',' + cells[i].c] = i; rc[i] = cells[i]; }
+  LAYOUT_SIG = sig;
+  LAYOUT = {idx:idx, rc:rc, n:cells.length};
+  // Published here rather than rebuilt inside simulate(): it used to be a second cache and
+  // could outlive a geometry change whenever simulate() did not run.
+  spotRCs = rc;
+  return LAYOUT;
 }
-// spot index (0-based) at an occupied cell, or -1 when the cell is spare
+function cellFilled(r, c){ return layout().idx[r + ',' + c] !== undefined; }
 function spotIndexAt(r, c){
-  if (!cellFilled(r, c)) return -1;
-  var idx = 0;
-  for (var rr = ROWS-1; rr > r; rr--)
-    for (var cc = 0; cc < COLS; cc++) if (cellFilled(rr, cc)) idx++;
-  for (var cd = 0; cd < c; cd++) if (cellFilled(r, cd)) idx++;
-  return idx;
+  var v = layout().idx[r + ',' + c];
+  return v === undefined ? -1 : v;
 }
-function gridRC(i){                         // i is 0-based spot index
-  if (i === -1) return shedRC();            // the shed lives outside the yard
-  var seen = 0;
-  for (var r = ROWS-1; r >= 0; r--)
-    for (var c = 0; c < COLS; c++){
-      if (!cellFilled(r, c)) continue;
-      if (seen === i) return {r:r, c:c};
-      seen++;
-    }
-  return {r:ROWS-1, c:0};
+function gridRC(i){
+  if (i === -1) return shedRC();
+  var rc = layout().rc;
+  return (rc[i] || {r:ROWS-1, c:0});
 }
+
 // The shed is a real grid square, SHED_DX cells due west of plant spot 1 on the
 // same row, following the same CELL lattice. Index -1 addresses it everywhere a
 // spot index is used; spot 0 in the action log means the shed.
-var SHED_DX = 5;
-function shedRC(){ return {r:ROWS-1, c:-SHED_DX}; }
+// The shed sits SHED_DX cells west of the yard. Advanced Mode stands the shed further
+// off bed 1; Simple Mode keeps the original short walk.
+var SHED_DX = 11;
+// ADVANCED MODE - three bed regions split by two rifts. ADV_MODE is plain state, NOT read
+// from the DOM: everything here lives in the worker core and a worker has no document, so
+// reading the checkbox threw in every worker and silently dropped the sweep to one thread.
+// The mode travels to workers in the setup message instead.
+// Bed 1 TARGETS 50% of the plants and grows past that only when bed 2 provably cannot
+// hold the remainder - see bed1PlantsA().
+var GUT_H = 4, GUT_V = 3, ADV_B1_PLANTS = 0.50, ADV_2A_COLS = 0.75, ADV_ROW_MIN = 10;
+// GUT_V is the PREFERRED vertical rift width, not a constant. A narrow field cannot
+// always afford it, and forcing it is what broke small yards: bed 2's width is pinned
+// at both ends (shed on the left, bed 1's max-x on the right), so after 2a takes C
+// columns and the rift takes its GUT_V, 2b is left with shedOffset(C) - GUT_V columns.
+// Below C = 8 that is <= 0, so 2b inverted (bed2bC0 > bed2bC1) and the rift never
+// rendered; and even where 2b survived, total capacity could fall short of N and
+// plants were dropped with no warning.
+//
+// vgutFor(C) therefore returns the WIDEST rift in [0, GUT_V] that still lets the
+// layout hold every plant. On any ordinary field that is GUT_V and nothing changes;
+// it only narrows as a last resort on cramped ones. Pure in C - it reads N and ROWS
+// but never bed1PlantsA(), so the candidate search in bed1PlantsA() can call it
+// without recursing back into itself.
+function vgutFor(C){
+  if (!C || C < 1) C = 1;
+  var sd = shedOffsetA(C);
+  var b1r = bed1RowsA(), b2r = Math.max(1, bed2RowsA());
+  // Columns bed 2 must have for bed 1 + bed 2 to hold N. Floor of 2 because bed 2 is
+  // two beds: 2a needs a column and 2b needs a column, whatever the plant count.
+  var need = Math.ceil(Math.max(0, N - C * b1r) / b2r);
+  if (need < 2) need = 2;
+  // A rift of g leaves (C + sd - g) columns for 2a + 2b, so the widest affordable
+  // rift is (C + sd - need). Clamped to [0, GUT_V].
+  var g = C + sd - need;
+  if (g < 0) g = 0;
+  if (g > GUT_V) g = GUT_V;
+  return g;
+}
+// The rift actually in force for the settled field.
+function vgutA(){ return vgutFor(bed1ColsA()); }
+// Advanced Mode is the default view, matching the checked checkbox in the toolbar.
+var ADV_MODE = true;
+function advancedOn(){ return ADV_MODE; }
+// Bed 1 takes round((ROWS+1)/2) rows. Bed 2 is the band above it. The horizontal gutter is
+// NOT a model row - it is inserted on screen by visRow() - so it must not be subtracted
+// here. Doing so handed bed 1 GUT_H rows beyond its cap (23 + 4 = 27), which also left the
+// plant fill straddling a partial column and losing spots.
+function bed1RowsA(){ return Math.max(1, Math.round((ROWS+1)/2)); }
+function bed2RowsA(){ return ROWS - bed1RowsA(); }
+// The shed sits SHED_OFFSET_FRAC of bed 1's span west of it. This is a PURE function of
+// bed 1's COLUMN count, deliberately not of its plant count: that is what keeps it
+// non-recursive. bed1PlantsA() tests a candidate column count C, derives the offset from
+// that C, and so never has to ask what the offset "would be" for a width it has not
+// settled on yet - which is exactly the circular reference a fraction-of-width invites.
+var SHED_OFFSET_FRAC = 0.45;
+function shedOffsetA(C){
+  return Math.max(1, Math.round((C || 1) * SHED_OFFSET_FRAC));
+}
+// Bed 1 TARGETS half the plants, in WHOLE columns only: the count is floored to a multiple
+// of the row count, so bed 1 is a clean rectangle with no short trailing column and 2b
+// lines up flush with all of it.
+//
+// It then GROWS one column at a time, and only while bed 2 genuinely cannot hold the
+// remainder. Bed 2's width is pinned at both ends (shed on the left, bed 1's max-x on
+// the right), so its total width is C + shedOffset(C) - vgut and its capacity is
+// (ROWS - r) * that; both are computed from the C under test, so the loop is a straight
+// fixed-point search with no recursion.
+//
+// The loop deliberately tests against the PREFERRED rift, GUT_V, not the shrunk one. It
+// has to: shrinking the rift frees bed 2 columns, which would make bed 2 look able to hold
+// the remainder, which would stop bed 1 growing - and then the rift would have to shrink
+// even further on a field that never needed it. Bed 1 growing is the preferred answer;
+// the rift is only narrowed once bed 1 has run out of columns (b1 == maxB1), which is
+// exactly the cramped-field case the shrink exists to rescue.
+function bed1PlantsA(){
+  var r = bed1RowsA();
+  var maxB1 = COLS * r;                      // bed 1 cannot be wider than the field
+  var b1 = Math.floor(Math.min(N, Math.round(ADV_B1_PLANTS*N)) / r) * r;
+  if (b1 < r) b1 = Math.min(N, r);          // always at least one column
+  var band = Math.max(1, ROWS - r);
+  while (b1 < maxB1 && b1 < N){
+    var C = b1 / r;
+    var budget = Math.max(1, C + shedOffsetA(C) - GUT_V);   // columns available to 2a+2b
+    var rest = N - b1;
+    if (b1 + Math.min(rest, band * budget) >= N) break;     // bed 2 can take the rest
+    b1 += r;                                  // otherwise give bed 1 one more column
+  }
+  return b1;
+}
+function bed2PlantsA(){ return N - bed1PlantsA(); }
+// Bed 2 starts on the shed's x: its bottom-left plant sits zero cells from the shed.
+function bed2C0(){ return -shedOffsetA(bed1ColsA()); }
+// Bed 1's column count, and its rightmost column - which is also the field's right edge.
+function bed1ColsA(){ return Math.max(1, bed1PlantsA() / bed1RowsA()); }
+function bed1LastColA(){ return bed1ColsA() - 1; }
+// 2a is as many columns wide as bed 1 is, starting at the shed's x.
+function bed2aColsA(){ return bed1ColsA(); }
+function vgC0(){ return bed2C0() + bed2aColsA(); }
+function vgC1(){ return vgC0() + vgutA() - 1; }
+function bed2bC0(){ return vgC1() + 1; }
+// 2b runs from the vertical gutter to the end of bed 1. Because 2a starts at bed2C0 and is
+// bed1Cols wide, this always resolves to SHED_DX - vgut columns, so bed 2's total width is
+// fixed at C + (SHED_DX - vgut) whatever the 75/20 split does.
+function bed2bC1(){ return bed1LastColA(); }
+function bed2bColsA(){ return Math.max(1, bed2bC1() - bed2bC0() + 1); }
+// Bed 2's split. Both beds are filled EXACTLY: 2a holds a whole number of full columns of
+// its own width C, 2b a whole number of full columns of its 8. Exact fill is what puts 2b
+// flush against both the vertical gutter and bed 1's max-x, and it puts 2a's right edge on
+// the gutter without moving 2a off the shed - 2a stays justified to the shed's x and is
+// simply complete. Need rest == C*ra + 8*rb with both heights <= the band.
+// 2a starts at the shed's x and is as many columns wide as it needs for its share over
+// its own height. The gutter is placed after 2a's OCCUPIED right edge, not after its
+// allotted width - placing it after the allotment left 2's empty columns sitting to the
+// left of the "gutter", which is what made the gap read wider than GUT_V.
+// Bed 2's split. 2a is justified to the shed's x and is as many columns wide as it needs;
+// the gutter follows 2a's OCCUPIED right edge (not its allotment - that left 2a's empty
+// columns sitting to the left of the "gutter" and made the gap read wider than GUT_V); 2b
+// then stretches from the gutter to bed 1's max-x.
+//
+// 2a and 2b share a fixed budget of columns: 2aCols + 2bCols is always C + SHED_DX - GUT_V,
+// because both outer edges are pinned (shed on the left, bed 1's max-x on the right). So the
+// only free variable is where the gutter sits, and the split has to be solved jointly: a
+// 75/25 share of the plants can ask for more of that budget than exists. Solving it by
+// searching 2a's height and falling back to a single row was the bug - one row needs an
+// unbounded number of columns, which pushed the gutter to column 194 and gave 2b a negative
+// width. Here 2a's width is capped at the widest that still leaves 2b a column, and both
+// plant counts are clamped to the rectangles that actually exist.
+function bed2Split(){
+  var sig = [N, ROWS, COLS, bed1ColsA(), ADV_MODE ? 1 : 0].join('|');
+  if (BED2 && sig === BED2_SIG) return BED2;
+  var band = Math.max(1, bed2RowsA());
+  var budget = Math.max(1, bed1ColsA() + shedOffsetA(bed1ColsA()) - vgutA());   // columns for 2a + 2b
+  var rest = bed2PlantsA();
+  var want = Math.round(ADV_2A_COLS * rest);
+  var out = null, bestTotal = -1;
+  var acMax = Math.max(1, budget - 1);
+  for (var ac = 1; ac <= acMax; ac++){
+    var bc = budget - ac;
+    if (bc < 1) continue;
+    // 2a takes its 75% share, 2b the remainder, each clamped to the rectangle that exists.
+    var a = Math.max(0, Math.min(want, ac * band, rest));
+    var b = Math.max(0, Math.min(rest - a, bc * band));
+    var total = a + b;
+    // Prefer the split that places the most plants; break ties toward 2a's 75% share.
+    if (total > bestTotal || (total === bestTotal && out && a > out.a)){
+      bestTotal = total;
+      out = {ac:ac, bc:bc, a:a, b:b,
+             ra:Math.max(1, Math.min(band, Math.ceil(a / ac))),
+             rb:Math.max(1, Math.min(band, Math.ceil(b / bc)))};
+    }
+  }
+  if (!out){                       // degenerate field: one column for 2a, rest for 2b
+    out = {ac:1, bc:Math.max(1, budget - 1), a:Math.min(rest, band), b:0, ra:band, rb:1};
+    out.b = Math.min(Math.max(0, rest - out.a), out.bc * out.rb);
+  }
+  BED2_SIG = sig;
+  BED2 = out;
+  return out;
+}
+function bed2aPlantsA(){ return bed2Split().a; }
+function bed2bPlantsA(){ return bed2Split().b; }
+function bed2aColsA(){ return bed2Split().ac; }
+function bed2aRowsA(){ return bed2Split().ra; }
+function vgC0(){ return bed2C0() + bed2aColsA(); }
+function vgC1(){ return vgC0() + vgutA() - 1; }
+function bed2bC0(){ return vgC1() + 1; }
+function bed2bC1(){ return bed1LastColA(); }
+function bed2bColsA(){ return Math.max(1, bed2bC1() - bed2bC0() + 1); }
+function bed2bRowsA(){ return bed2Split().rb; }
+// Bed 2 is the UPPER band, so the horizontal rift sits above bed 1 and bed 1 shifts down.
+// The row where bed 2 ends is bed 2's own row count, i.e. the band above the gutter.
+function bed2EndRow(){ return bed2RowsA(); }
+// Screen row for a model row. Simple Mode has ONE band and no horizontal gutter, so the
+// row is its own screen row. Without the mode check this still added GUT_H to every
+// Simple Mode row, which walked the whole grid down 4 cells and pushed the shed - which is
+// positioned from visRow() - off the bottom of the field entirely.
+function visRow(r){
+  if (!advancedOn()) return r;
+  return (r < bed2EndRow()) ? r : r + GUT_H;
+}
+// Plain state, NOT the DOM. These helpers run inside the worker core and a worker has no
+// document, so reading the checkbox from them threw in every worker and the sweep quietly
+// dropped to single-threaded. The mode travels to workers in the setup message instead.
+
+// The yard is two beds split by a horizontal gutter. Bed 1 is the LOWER block; the cut
+// sits where bed 1 holds about 53% of the plant spots, so bed 2 takes the rest. Bed 1 is
+// lower because gridRC() numbers spots from the bottom-right upward, which puts bed 1 on
+// the low indices - the spots planted first.
+
+
+
+
+
+function shedRC(){ return {r:ROWS-1, c:-shedOffsetA(bed1ColsA())}; }
 // Pixel centres. Yard columns sit SHED_DX cells right of the shed gutter, so
 // every x coordinate carries that offset and shed walks draw to the shed cell.
-function drawX(c){ return (c+SHED_DX)*CELL + CELL/2; }
-function drawY(r){ return r*CELL + CELL/2; }
+function drawX(c){ return (c+shedOffsetA(bed1ColsA()))*CELL + CELL/2; }
+function drawY(r){ return visRow(r)*CELL + CELL/2; }
 var spotRCs = null;   // spot index -> row/col, filled once per simulate()
 function distCells(a, b){                   // a,b are 0-based spot indices; -1 = shed
   var ra = (a === -1) ? shedRC() : (spotRCs ? spotRCs[a] : gridRC(a));
   var rb = (b === -1) ? shedRC() : (spotRCs ? spotRCs[b] : gridRC(b));
-  var dr = ra.r - rb.r, dc = ra.c - rb.c;
+  // Screen rows, so a walk from the top of bed 1 to the bottom of bed 2 crosses the
+  // gutter instead of reading as one step. This is what makes the lane real to the
+  // simulation and not just a drawn gap.
+  var dr = visRow(ra.r) - visRow(rb.r), dc = ra.c - rb.c;
   return Math.sqrt(dr*dr + dc*dc);         // always Euclidean
 }
 function distCm(a, b){ return distCells(a, b) * CFG.cmIdx; }
@@ -653,18 +985,28 @@ function simulate(){
   // The shed handles one drop-off at a time. A worker that arrives while
   // another drop is running waits at the shed - that wait is Clogging.
   var shedFreeAt = 0;
-// HOUSE CHORE: refueling the burgage plot. The first request is on day 15 of
-  // the starting month (sim day index 14 = 15 Mar, because sim day 0 is 01 Mar).
+// HOUSE CHORE 1 of 2: refueling the burgage plot. The first request is on day 15 of
+  // the starting month (sim day index 14 = 15 Mar, because sim day 0 is 01 Mar), and
+  // the first day is user-settable via "Refuel First Day".
   // Fuel then takes Time to Refuel days to come, and the ARRIVAL is what dates
   // the next request: the same day-of-month, in the next month that has that
   // day at all. The game treats refuel_day as a strict day-of-month number and
   // simply skips months that are too short, so a 31st waits for the next 31-day
   // month and a 29th/30th/31st in January goes straight to March.
+  var choreFirstDay = function(v, dflt){ return (v === undefined || v === null) ? dflt : v; };
   var refuelAt = [];
-  for (var reqDay = REFUEL_FIRST_DAY-1; reqDay < CFG.simDays;
+  for (var reqDay = choreFirstDay(CFG.refuelFirstDay, REFUEL_FIRST_DAY)-1; reqDay < CFG.simDays;
        reqDay = addMonthsSkipShort(Math.floor(reqDay + CFG.refuel)))
     refuelAt.push(reqDay * CFG.tick);
   var rfi = 0;                       // next un-consumed refuel request
+  // HOUSE CHORE 2 of 2: re-watering. Identical mechanic to fueling - a worker walks
+  // to the house, waits, and is out of the yard for the duration - but scheduled
+  // entirely separately, so the two can coincide or interleave freely.
+  var waterAt = [];
+  for (var wDay = choreFirstDay(CFG.rewaterFirstDay, REWATER_FIRST_DAY)-1; wDay < CFG.simDays;
+       wDay = addMonthsSkipShort(Math.floor(wDay + CFG.rewater)))
+    waterAt.push(wDay * CFG.tick);
+  var wfi = 0;                       // next un-consumed re-water request
   grownSec = growSecondsAvg();
   spotRCs = new Array(N);
   for (var si=0; si<N; si++) spotRCs[si] = gridRC(si);
@@ -732,22 +1074,30 @@ function simulate(){
             (Math.abs(start - bc.start) <= 1e-9 && (pri < bc.pri || (pri === bc.pri && dist < bc.dist - 1e-12))))
           bc = {spot:i, type:typ, start:start, pri:pri, dist:dist};
       }
-      // House chore: outranks every backyard task (pri 0 < 1) whenever it can
-      // start at the same moment, so a queued chore is never postponed behind
-      // fieldwork. The drop-loot trip is not a candidate at all - it is forced
-      // onto the worker that just harvested, which is why it stays on top.
+      // House chores (fueling and re-watering) outrank every backyard task
+      // (pri 0 < 1) whenever they can start at the same moment, so a queued
+      // chore is never postponed behind fieldwork. Both have identical mechanics -
+      // walk to the house, wait Time-to-X days, return - so they are built by one
+      // helper and differ only in schedule. The sooner one is requested wins, so a
+      // worker never takes the later chore while the earlier one sits pending.
+      // Neither uses shedFreeAt: a chore is not a drop-off. The drop-loot trip is not
+      // a candidate at all - it is forced onto the worker that just harvested,
+      // which is why it stays on top.
       var lc = bc, choreC = null;
-      if (rfi < refuelAt.length){
-        var reqT = refuelAt[rfi];
-        var rs = Math.max(wk.freeAt, reqT);
-        if (rs <= cap){
-          var cmC = distCm(wk.pos, -1);
-          // Not offered at all when the round trip cannot finish inside the run,
-          // so no worker is burnt on work that would be thrown away.
-          if (rs + cmC / CFG.walkSpd + CFG.refuel*CFG.tick <= cap)
-            choreC = {spot:-1, type:'chore', start:rs, pri:0, dist:distCells(wk.pos, -1), cm:cmC};
-        }
-      }
+      var mkChore = function(list, idx, holdSecs, kind){
+        if (idx >= list.length) return null;
+        var rs = Math.max(wk.freeAt, list[idx]);
+        if (rs > cap) return null;
+        var cmC = distCm(wk.pos, -1);
+        // Not offered at all when the round trip cannot finish inside the run,
+        // so no worker is burnt on work that would be thrown away.
+        if (rs + cmC / CFG.walkSpd + holdSecs*CFG.tick > cap) return null;
+        return {spot:-1, type:kind, start:rs, pri:0, dist:distCells(wk.pos, -1), cm:cmC,
+                hold:holdSecs, list:list, idx:idx};
+      };
+      choreC = mkChore(refuelAt, rfi, CFG.refuel, 'chore');
+      var waterC = mkChore(waterAt, wfi, CFG.rewater, 'water');
+      if (waterC && (!choreC || waterC.start < choreC.start - 1e-9)) choreC = waterC;
       if (choreC && (!lc || better(choreC, lc))) lc = choreC;
       if (lc && better(lc, best)){ best = lc; best.w = wi; }
     }
@@ -759,26 +1109,32 @@ function simulate(){
       if (!anyFree) break;
       var nt = Infinity;
       for (var qi=0; qi<N; qi++) if (state[qi]===GROWING && readyAt[qi] < nt) nt = readyAt[qi];
-      // A pending refuel request is an event of its own: skipping it here would
+      // A pending chore request is an event of its own: skipping it here would
       // push the chore out to the next ripening, which is not what a request on
-      // a fixed day of the month does.
+      // a fixed day of the month does. Both schedules can advance the clock.
       if (rfi < refuelAt.length && refuelAt[rfi] > t && refuelAt[rfi] < nt) nt = refuelAt[rfi];
+      if (wfi < waterAt.length && waterAt[wfi] > t && waterAt[wfi] < nt) nt = waterAt[wfi];
       if (nt === Infinity || nt > cap) break;
       if (nt <= t) break;        // no forward progress is possible; stop
       t = nt;
       continue;
     }
     var W = workers[best.w];
-    if (best.type === 'chore'){
-      // One logged 'chore' action spanning the walk to the shed AND the wait
-      // there: both are Idle as far as every figure is concerned (stats maps
-      // chore onto the idle category), but the worker grid still shows C so the
-      // trip is visible. The dwell is NOT clipped by winter: this is a house
-      // chore, not fieldwork, and the request lands on a fixed day each month.
+    if (best.type === 'chore' || best.type === 'water'){
+      // Logged as TWO actions - a walk to the house, then the dwell there - the
+      // same shape as every other task. It used to be ONE action spanning both,
+      // which painted the journey in the idle colour and made the worker look
+      // like they teleported to the shed and sat there for the whole trip.
+      // The dwell is NOT clipped by winter: this is a house chore, not fieldwork,
+      // and the request lands on a fixed day each month. Re-watering is identical
+      // except for its own hold duration, which rides on best.hold.
       var chWalkEnd = best.start + best.cm / CFG.walkSpd;
-      var chEnd = chWalkEnd + CFG.refuel*CFG.tick;
-      actions.push({w:best.w, type:'chore', start:best.start, end:chEnd, spot:0, cm:best.cm, walkEnd:chWalkEnd});
-      W.pos = -1; W.freeAt = chEnd; rfi++;
+      var chEnd = chWalkEnd + best.hold*CFG.tick;
+      if (chWalkEnd > best.start + 1e-9)
+        actions.push({w:best.w, type:'walk', start:best.start, end:chWalkEnd, spot:0, cm:best.cm});
+      actions.push({w:best.w, type:best.type, start:chWalkEnd, end:chEnd, spot:0});
+      W.pos = -1; W.freeAt = chEnd;
+      if (best.type === 'water') wfi++; else rfi++;
       if (chEnd > t) t = chEnd;
       continue;
     }
@@ -832,7 +1188,9 @@ function simulate(){
     if (fin > t) t = fin;
   }
   endT = t;
-  window.__simProfiling = __p;
+  // __simProfiling is read by the on-page profiling panel. A worker has no window and
+  // never renders that panel, so the assignment is simply skipped there.
+  if (typeof window !== 'undefined') window.__simProfiling = __p;
   for (var ri=0; ri<N; ri++)
     if (ripe(ri, cap) && firstReadyTick[ri] < 0) firstReadyTick[ri] = readyAt[ri]/CFG.tick + 1;
   // IDLE IS DERIVED, NOT LOGGED: walk each worker's own actions and fill the
@@ -935,12 +1293,12 @@ function aggregate(){
   var perYear = [];
   for (var y=0; y<nYears; y++) perYear.push({plow:0, sow:0, harv:0, walk:0, drop:0, clog:0, idle:0, cnt:0, clogN:0, active:0, full:true});
   actions.forEach(function(a){
-    // 'chore' is the refuel trip: walk to the shed plus the wait there. It is
-    // classified as Idle, as specified, so it adds to idle time and count and
-    // never to non-idle utilisation.
+    // 'chore' (fueling) and 'water' (re-watering) are the two house trips: walk to the
+    // house plus the wait there. Both are classified as Idle, as specified, so they
+    // add to idle time and count and never to non-idle utilisation.
     var c = (a.type==='plow')?'plow':(a.type==='sow')?'sow':(a.type==='harvest')?'harv':
             (a.type==='walk')?'walk':(a.type==='drop')?'drop':(a.type==='clog')?'clog':
-            (a.type==='idle'||a.type==='chore')?'idle':null;
+            (a.type==='idle'||a.type==='chore'||a.type==='water')?'idle':null;
     if (!c) return;
     catSec[c] += activeSeconds(a.start, a.end);
     catCnt[c]++;
@@ -975,6 +1333,27 @@ function aggregate(){
     }
     if (open) iv.push(open);
     return iv;
+  }
+  // Winter Plant Spot Utilization: how many spots are growing OR ripe on 01 Dec of
+  // that calendar year. 01 Dec is a snapshot, not a peak - it is the one moment of the
+  // year every crop in the ground is standing, which is the closest the game comes to
+  // a headcount of what the yard is actually carrying. A spot counts from the end of
+  // its sow action (planted) until its harvest finishes clearing it, so a ripe crop
+  // waiting on the crew still counts, and a spot replowed afterwards does not.
+  function winterCountInYear(yi){
+    var t = simDayOf(yi, 11, 1)*T;
+    var c = 0;
+    for (var sp=0; sp<N; sp++){
+      var segs = perSpot[sp];
+      for (var k=0; k<segs.length; k++){
+        var g = segs[k];
+        if (g.kind !== 'sow') continue;
+        // Never harvested -> still in the ground at the end of the run.
+        var until = (g.harvEnd !== undefined) ? g.harvEnd : Infinity;
+        if (g.end <= t && t < until){ c++; break; }
+      }
+    }
+    return c;
   }
   function peakInYear(yi){
     // Calendar-year bounds, matching the per-year grouping above: calendar year
@@ -1011,6 +1390,7 @@ function aggregate(){
   var workerDays = activeDaysTotal * NW;
   return {T:T, totalDays:totalDays, nYears:nYears, catSec:catSec, catCnt:catCnt,
           perYear:perYear, activeDaysTotal:activeDaysTotal, workerDays:workerDays,
+    winterCountInYear:winterCountInYear,
           peakInYear:peakInYear};
 }
 // The years every average is taken over: complete years only, and never Y1,
@@ -1050,24 +1430,32 @@ function stats(){
   for (var yh=0; yh<nYears; yh++)
     h += '<th>Y'+(yh+1)+(perYear[yh].full?'':' <span style="color:#b00">*</span>')+'</th>';
   h += '</tr>';
-  h += '<tr><td>Harvest (Plant Count)</td>';
+  h += '<tr><td title="Number of plant harvests performed in the year">Harvest (Plant Count)</td>';
   for (var y5=0; y5<nYears; y5++) h += '<td>'+perYear[y5].cnt+'</td>';
   h += '</tr>';
-  h += '<tr><td title="Plant count &times; YieldMod &times; BaseYieldPer100Plants &divide; 100, rounded.">Harvest (<b style="color:'+cropColor+'">'+cropName+'</b> Yield)</td>';
+  h += '<tr><td title="Actual number of vegetables claimed from harvest in the year">Harvest (<b style="color:'+cropColor+'">'+cropName+'</b> Yield)</td>';
   for (var y5v=0; y5v<nYears; y5v++) h += '<td style="color:'+cropColor+';font-weight:bold">'+vegYield(perYear[y5v].cnt)+'</td>';
   h += '</tr>';
-  h += '<tr><td>Peak Plant Spot Utilization (Count)(% of Total)</td>';
+  h += '<tr><td title="The peak number of unique plant spots that actually received work in the year. 100% is usually a sign that number of plant spots can be increased for more yield. PPSU will start to fall when labor is finally the limiting factor and increasing plant spots can no longer increase yield. Simulation results actually show that peak yield can sometimes be reached a little earlier than this.">Peak Plant Spot Utilization (Count)(% of Total)</td>';
   for (var y8=0; y8<nYears; y8++){
     var pk2 = peakInYear(y8), pc2 = 100*pk2/N;
     h += '<td'+(pc2 < 100 ? ' style="color:#b00;font-weight:bold"' : '')+'>'+pk2+' ('+pc2.toFixed(1)+'%)</td>';
   }
   h += '</tr>';
+  h += '<tr><td title="This is the percentage of total plant spots that are either growing or ripe on 01 Dec, the first day of Winter. A high WPSU creates a bumper harvest in the next year.">Winter Plant Spot Utilization (Count)(% of Total)</td>';
+  for (var yw=0; yw<nYears; yw++){
+    var wq2 = A.winterCountInYear(yw), wpc2 = 100*wq2/N;
+    h += '<td'+(wpc2 < 100 ? ' style="color:#b00;font-weight:bold"' : '')+'>'+wq2+' ('+wpc2.toFixed(1)+'%)</td>';
+  }
+  h += '</tr>';
   // Avg Spot Turnover Rate: that year's harvest actions divided by plant spots - how
   // many crops each spot turns over in a year. Falls as the yard outgrows the crew.
-  h += '<tr><td title="Harvest actions that year divided by plant spots: how many crops each spot turns over in a year.">Avg Spot Turnover Rate (harvests per year)</td>';
+  h += '<tr><td title="Turnover Rate is how many times a particular plant spot manages to get harvested in a year. The theoretical maximum number is '+
+        turnoverMax()+' for '+cropName+
+        '. The Average Turnover is the Turnover Rate for all the spots, averaged.">Avg Spot Turnover Rate (harvests per year)</td>';
   for (var y8t=0; y8t<nYears; y8t++) h += '<td>'+(perYear[y8t].cnt/Math.max(1,N)).toFixed(2)+'</td>';
   h += '</tr>';
-  h += '<tr><td title="Everything but idle: fieldwork plus walking, shed walks, drop loot and shed waiting.">Worker Utilization (Non-Idle%)</td>';
+  h += '<tr><td title="The percentage of all worker-hours in a '+GROW_DAYS+'-day working year that is spent doing anything except Idle.">Worker Utilization (Non-Idle%)</td>';
   for (var y6b=0; y6b<nYears; y6b++){
     var base7b = Math.max(1, perYear[y6b].active*NW*T);
     h += '<td>'+(100*(1 - perYear[y6b].idle/base7b)).toFixed(1)+'%</td>';
@@ -1078,7 +1466,7 @@ function stats(){
 // the number of separate waits. Drop Loot is deliberately NOT in here - that is the
 // walk to the shed and the deposit itself, which is work, not a queue; it is reported
 // separately in Worker Utilization rather than folded into this figure.
-h += '<tr><td title="Workers waiting at the shed while another drop-off runs. Share of the year&rsquo;s available time, '+GROW_DAYS+' days per worker. Excludes the walk to the shed and the deposit itself.">Clogging (Count)(% of '+GROW_DAYS+'d per worker)</td>';
+h += '<tr><td title="Percentage of all worker-hours in a '+GROW_DAYS+'-day working year that is spent queuing at the shed to drop off loot. This has been suspected to be major penalty to backyard yield but so far has not been observed by simulation to be a significant factor.">Clogging (Count)(% of '+GROW_DAYS+'d per worker)</td>';
   for (var y6c=0; y6c<nYears; y6c++){
     var avail = Math.max(1, perYear[y6c].active*NW*T);
     h += '<td>'+perYear[y6c].clogN+' ('+(100*perYear[y6c].clog/avail).toFixed(1)+'%)</td>';
@@ -1094,9 +1482,10 @@ h += '<tr><td title="Workers waiting at the shed while another drop-off runs. Sh
       'There are some plant spots that were never reached or worked in an entire year. '+
       'Almost certainly the extension is too big for the current number of workers.</div>';
 // AVERAGED WORKER OUTPUT: what the crew actually delivered, averaged over
-  // complete years only. Y1 is excluded because it carries the startup ramp
-  // (spots fill from bare, so it understates a steady year), and any partial
-  // year is excluded because it is not comparable with a 365-day year.
+  // complete years only. Y1 is excluded because its spots were sown in Spring Y1 and
+  // harvested within it, with no Spring harvest coming from work done the prior year -
+  // so it is not a steady-state year. Any partial year is excluded because it is not
+  // comparable with a 365-day year.
   var wlYears = qualifyingYears(A);
   var avgOut = 0, avgOutScaled = false;
   if (wlYears.length){
@@ -1110,16 +1499,11 @@ h += '<tr><td title="Workers waiting at the shed while another drop-off runs. Sh
   }
   var yrLabel = wlYears.length ? ('Y'+wlYears.map(function(y){return y+1;}).join('&ndash;Y')) : '';
   var exclY1 = wlYears.length > 0 && wlYears.indexOf(0) < 0;
-  var underbuilt = 0, underbuiltNote = '';
-  for (var ub=0; ub<nYears; ub++){
-    // Only complete years can say anything about whether the crew can work the
-    // whole yard: a partial year simply runs out of time, so a low peak there
-    // says nothing about the size of the yard.
-    if (!perYear[ub].full) continue;
-    var pk = peakInYear(ub);
-    if (pk < N){ underbuilt = 1; underbuiltNote = 'Year '+(ub+1)+' peaked at '+pk+' of '+N+
-      ' spots in use ('+(100*pk/N).toFixed(1)+'%), so the crew never even gets every spot into production. '; }
-  }
+  // A partial year only needs explaining when it is one that could be cured by running
+  // longer, i.e. one other than Y1. Y1 is short by construction and the sentence about it
+  // already covers the exclusion, so naming a 365-day year there would be noise.
+  var nonY1Partial = false;
+  for (var y5=1; y5<nYears; y5++) if (!perYear[y5].full){ nonY1Partial = true; break; }
   // A harvest count is NOT a crop yield. The simulation counts harvest actions;
   // the crop has to be converted on top via YieldMod x BaseYield / 100. Both are
   // shown because they differ by roughly the conversion factor, and the yield
@@ -1132,8 +1516,8 @@ h += '<tr><td title="Workers waiting at the shed while another drop-off runs. Sh
   h += '<div style="font-size:12.5px;color:#555;margin-top:8px;line-height:1.6">'+
     '<b>Averaged Worker Output: '+rateBoth(avgOut)+'</b> &mdash; what the crew actually delivered in '+
     'this simulation, averaged over '+(avgOutScaled ? 'the partial run, scaled up to a full year' : yrLabel)+'. '+
-    (exclY1 ? '<b>Y1 is excluded</b> because it carries the startup ramp, when the spots are still filling from bare. ' : '')+
-    (avgOutScaled ? '' : 'Any partial year is excluded as well, being shorter than a 365-day year. ')+
+    (exclY1 ? '<b>Y1 is excluded</b> from statistics due to no Spring harvest from prior year. ' : '')+
+    (avgOutScaled || !nonY1Partial ? '' : 'Any partial year is excluded as well, being shorter than a 365-day year. ')+
     '</div>';
 
   var partial = [];
@@ -1154,19 +1538,12 @@ h += '<tr><td title="Workers waiting at the shed while another drop-off runs. Sh
     + '</div>';
   }
 
-  h += '<div style="font-size:12.5px;color:#555;margin-top:8px;line-height:1.6">'+
-    '<u><b>Limits and Recommendations</b></u>.<ul class="ceil">'+
-    '<li><button id="findLimitBtn">Find limit</button>'+
-    '<span class="hint" style="margin-left:6px">run an exhaustive sweep of plant counts to measure the real limit</span></li>'+
-    '</ul>';
-
-  if (underbuilt)
-    h += '<div style="color:#555;margin-top:5px">Note: '+underbuiltNote+
-      'The backyard is larger than the crew can work &mdash; reduce the plant count or add workers.</div>';
-  h += '</div>';
-  h += limitFitBlock();      // the Find limit sweep, once one has been run
+  // The sweep controls belong to the plot they produce, so they live in limitFitBlock()'s
+  // header rather than under a heading of their own.
+  h += limitFitBlock();
   document.getElementById('stats').innerHTML = h;
   wirePlotGrip();            // the grip is SVG, so it dies with every repaint
+  wirePlotMouse();           // same for the mouse-driven reference line
   var exEl = document.getElementById('exportPng');
   if (exEl) exEl.addEventListener('click', exportPng);
   var cs = document.getElementById('cropSelect');
@@ -1202,13 +1579,17 @@ var LIMIT_C1 = 500;          // coarsest grid: brackets the peak across the rang
 // several percent plant-count to plant-count - it crosses this once and stays crossed,
 // so it bounds the search reliably where the output maximum does not.
 var LIMIT_PPSU = 85;
-var LIMIT_KNEE_MAX = 200;     // most fine steps spent walking down to the 95% crossing
-var LIMIT_LEFT_MAX = 400;     // most fine steps spent walking left to the leftmost maximum
 // Plot size in px, user-resizable from the grip on its bottom-right corner. The
 // defaults are the old 760x250 grown by 20% and 30%. Kept in module scope because the
 // grip rewrites them and the plot is rebuilt from scratch on every panel repaint.
-var PLOT_W = 912, PLOT_H = 325;
-var PLOT_MIN_W = 520, PLOT_MIN_H = 260, PLOT_MAX_W = 2000, PLOT_MAX_H = 900;
+// Default width leaves the plot AREA at the size it has always been; the extra 44px is
+// the widened right margin that now carries two Y axis titles as well as tick labels.
+// Default height is double what it was (325 -> 650) so the box plots, the two-line
+// captions and the taller axis type all have room to breathe without overlapping.
+// Default width is 20% wider than the previous 956, on top of the earlier height doubling.
+// PLOT_MAX_W is raised to match so the resize grip can actually reach the new default.
+var PLOT_W = 1147, PLOT_H = 650;
+var PLOT_MIN_W = 520, PLOT_MIN_H = 260, PLOT_MAX_W = 2400, PLOT_MAX_H = 1800;
 // Absolute ceiling on the plant count a sweep will scan to, whatever the crew size.
 // Beyond it the sweep stops and the panel says the maximum may lie further out. This has to
 // clear the point where the biggest crew saturates: 8 workers on Cabbages were still
@@ -1216,8 +1597,7 @@ var PLOT_MIN_W = 520, PLOT_MIN_H = 260, PLOT_MAX_W = 2000, PLOT_MAX_H = 900;
 // over. Costs nothing for crews that saturate early - they stop on the first coarse
 // point that fails to improve.
 var PLANT_HARD = 8000;
-var KNEE_FRAC = 0.95;      // "close enough to the peak" for the reported knee
-var limitFit = null;      // completed sweep: {pts:[...], kneeN, peakOut, sig}
+var limitFit = null;      // completed sweep: {pts:[...], pleN, ramps, peakOut, sig}
 var limitRun = null;      // sweep in progress, or null
 var skipStats = false;    // set while a sweep runs: simulate() must not repaint the panel
 // Everything the sweep holds fixed. A curve measured under other settings is not
@@ -1239,19 +1619,28 @@ function limitSig(squareOn){
 // years and the same formulas as the ceilings block, so curve and panel agree.
 function measureRun(A){
   var ys = qualifyingYears(A);
-  var out = 0, busy = 0, harv = 0, clog = 0, peak = 0;
+  var out = 0, busy = 0, harv = 0, clog = 0, peak = 0, win = 0;
+  // The per-year crop figure behind each qualifying year's mean. `crop` below stays the
+  // mean, which is what every average, the panel and the CSV already use; this array is the
+  // same set of numbers un-collapsed, so the limit plot can show how much the years
+  // actually disagreed instead of presenting a flat series that looks exact.
+  var cropY = [];
   for (var i=0;i<ys.length;i++){
     var y = A.perYear[ys[i]];
     out += y.cnt; harv += y.cnt; clog += y.clog;
+    win += A.winterCountInYear(ys[i]);
     busy += y.plow + y.sow + y.harv + y.walk + y.drop + y.clog;
     peak += A.peakInYear(ys[i]);
+    cropY.push(vegYield(y.cnt));
   }
   var k = Math.max(1, ys.length);
   var base = k * GROW_DAYS * A.T * NW;
   return {n:N, out:out/k, util:(base>0 ? 100*busy/base : 0), ppsu:peak/k,
+          wpsu:win/k, wpsuPct:(N>0 ? 100*(win/k)/N : 0),
           ppsuPct:(N>0 ? 100*(peak/k)/N : 0), clog:(base>0 ? 100*clog/base : 0),
           turn:(N>0 ? (out/k)/N : 0),
           crop:vegYield(out/k),        // vegetables per year, not harvest actions
+          cropY:cropY,                  // per qualifying year, same units as crop
           perCycle:(harv > 0 ? busy/harv : 0)};   // busy seconds per completed harvest
 }
 // The scan runs in four phases.
@@ -1268,8 +1657,7 @@ function measureRun(A){
 //   fill  the range below the limit is measured at LIMIT_STEP by sampling inward from
 //         the limit down to the floor. Densely covered, the output peak is a reading off
 //         a real grid rather than whichever noisy sample happened to win.
-//   flat/left/knee  confirm the peak, take the leftmost count that achieves it, and walk
-//         down to the 95% crossing.
+//==WORKER-CORE-END==
 function limitNextN(){
   var R = limitRun, guard = 0;
   while (guard++ < 4000){
@@ -1303,21 +1691,228 @@ function limitNextN(){
         }
         R.fillSide = -R.fillSide;
       }
-      if (nx == null){ R.phase = 'left'; R.leftWalk = 0; continue; }
+      // The fill covers every count from the floor to the limit at LIMIT_STEP, skipping
+      // whatever the coarse pass already measured. There is nothing left to walk for: the
+      // old left/knee descent re-read counts this grid already held, and because the
+      // de-dup keeps the higher reading that quietly turned part of the grid into
+      // best-of-2. finishLimit resolves the plateau edge from this single-sample grid.
+      if (nx == null){ R.phase = 'done'; return null; }
       return nx;
     }
-    if (R.phase === 'left'){
-      var l = R.bestN - LIMIT_STEP;
-      if (l < R.lo || R.leftWalk >= LIMIT_LEFT_MAX) return null;
-      return l;
-    }
-    if (R.phase === 'knee'){
-      var k = R.kneeAt - LIMIT_STEP;
-      if (k < R.lo || R.kneeWalk >= LIMIT_KNEE_MAX) return null;
-      R.kneeAt = k;                    // must advance or this re-reads one count
-      return k;
-    }
     return null;
+  }
+  return null;
+}
+
+// --------------------------------------------------------- output ramps
+// The green bands are the two spans over which another plant still buys a worthwhile
+// amount of crop. They are read off the MARGINAL GAIN
+//
+//     g[i] = (out[i+1] - out[i]) / (N[i+1] - N[i])
+//
+// the extra vegetables per year that one more plant adds - not off turnover.
+//
+//   1  The COLLAPSE is where another plant stops buying anything. It is read from a
+//      piecewise-constant fit that has to explain the whole series in three levels,
+//
+//          A [start..b1]   C [b1..b2]   D [b2..end]
+//
+//      with C above half of A (there really are two climbs) and D below half of both
+//      (the tail really has collapsed); the collapse is b2. Requiring D to BE a collapse
+//      is what makes the answer independent of where the sweep happens to stop. An
+//      unconstrained two-segment fit spends its second segment on the drop out of ramp 1
+//      instead, because with a short tail that drop is the larger level shift - which is
+//      why carrots read 200-240 on a real sweep and 340-490 only on a full one.
+//
+//   2  A second fit splits the same series into four levels, A B C D, where B is the
+//      trough between the ramps. It is only believed if it beats the three-level fit by
+//      GAIN_MIN of that fit's error; otherwise the "trough" is a one-step notch inside a
+//      single ramp (beetroots, 190-200) and the three-level fit stands. Given a real
+//      trough the collapse is the EARLIEST point whose error is within TOL of the best,
+//      because the level either side of the collapse is genuinely ambiguous - carrots
+//      gain 0.96 a plant for the 40 plants after the ramp ends, between the ramp's 1.80
+//      and the tail's 0.11 - and the ramp end is the earlier reading.
+//
+//   3  Below the collapse, two segments give the ramps directly. If the middle piece of a
+//      three-segment fit is a genuine trough - its gain under half the smaller of its two
+//      neighbours - the ramps are either side of it (carrots 240-340, cabbages 120-130).
+//      If it is not, that fit is rejected and the single best split stands, which gives the
+//      two ramps directly (beetroots split at 170).
+//
+// DIP is the only ratio in steps 1 and 3, and it is not fitted to any endpoint. Carrots
+// bind it from below - their trough sits at 0.20 of the smaller neighbour, so to keep it
+// the ratio must be above that - and beetroots bind it from above, their 170-230 dip
+// sitting at 0.69, so to reject it the ratio must stay below that. Any value in that open
+// interval gives the same three answers, so 0.5 is the midpoint rather than a tuned figure.
+// GAIN_MIN and TOL were read off the same three crops and are just as loose: the trough
+// that has to be rejected buys 0.2-0.6% of the three-level error, the two that have to be
+// kept buy 11-23%, so 3% sits between them with an order of magnitude either side, and
+// every truncation from 600 to 1200 plants gives the same three answers for any TOL from
+// 1% to 3%.
+//
+// A segment's gain is the mean of g across it, which is exactly the end-to-end slope of
+// output over that span: the vegetables per plant the span delivered as a whole.
+//
+// Deliberately no derivative window, no slope threshold and no absolute plants figure:
+// every previous attempt at this failed because the gain wobbles by as much as the signal.
+// Fitting piecewise-constant levels and asking whether the middle one is a trough is the
+// same question, and it is not sensitive to a single noisy step.
+function outputRamps(pts){
+  if (!pts || pts.length < 8) return null;
+  var DIP = 0.5, GAIN_MIN = 0.03, TOL = 0.02;
+  // The trough is a shallower thing than the collapse and needs its own, looser bar.
+  // DIP governs the block fits that FIND the collapse, where a false dip costs segments;
+  // DIP_TROUGH only decides whether the middle of three pieces under the collapse is a
+  // real trough. Measured M/min(L,R) over every dataset (5y and 7y, 1 and 2 families):
+  // the deepest FALSE trough is beetroots at 0.688 / 0.776 (monotonic, must be rejected)
+  // and the shallowest REAL one is carrots 7y at 0.563 (210-350 at 0.98 against a 350-480
+  // ramp at 1.74). 0.6 sits in that gap. At 0.5 the 7y carrots trough was rejected and the
+  // two ramps either side of 350 were reported as one, which reads as a single gradient on
+  // a curve that visibly has two.
+  var DIP_TROUGH = 0.6;
+  // The four-level search is cubic in the number of steps. A sweep that long means many
+  // families, where the counts run to thousands and the three-level collapse is stable
+  // anyway - it reads 300 / 410 / 490 at every truncation from 800 to 1200 - so past this
+  // length the four-level pass is skipped rather than left to stall the tab.
+  var FOUR_MAX = 260;
+  // A hard cap makes the last points byte-identical. Drop a trailing run of constant
+  // output so the collapse fit is not handed a zero-variance tail to chase.
+  function sameOut(a,b){ var d = Math.abs(a-b); return d <= 1e-9 + 1e-9*Math.abs(a); }
+  var last = pts.length-1, cut = last;
+  while (cut > 0 && sameOut(pts[cut].out, pts[cut-1].out)) cut--;
+  var P = (last - cut >= 3) ? pts.slice(0, cut+1) : pts;
+  var m = P.length - 1;                       // number of gain steps
+  if (m < 4) return null;
+  var g = [];
+  for (var q=0; q<m; q++) g.push((P[q+1].out - P[q].out) / (P[q+1].n - P[q].n));
+  // Prefix sums, so the error of any step range is two subtractions and a multiply.
+  var pre = [0], pre2 = [0];
+  for (var a0=0; a0<m; a0++){ pre.push(pre[a0]+g[a0]); pre2.push(pre2[a0]+g[a0]*g[a0]); }
+  function mcost(i,j){ var k = j-i, s = pre[j]-pre[i], s2 = pre2[j]-pre2[i]; return Math.max(0, s2 - s*s/k); }
+  function mgain(i,j){ return (j > i) ? (pre[j]-pre[i])/(j-i) : 0; }
+  // Optimal K-segment piecewise-constant fit of the gain series, minimum segment length
+  // minlen steps. Returns the internal break indices, or null if K segments do not fit.
+  function bestBreaks(gg, K, minlen){
+    var mm = gg.length, INF = Infinity;
+    if (mm < K*minlen) return null;
+    var pre = [0], pre2 = [0];
+    for (var a=0; a<mm; a++){ pre.push(pre[a]+gg[a]); pre2.push(pre2[a]+gg[a]*gg[a]); }
+    function cost(i,j){ var k = j-i, s = pre[j]-pre[i], s2 = pre2[j]-pre2[i]; return Math.max(0, s2 - s*s/k); }
+    var best = [], back = [];
+    var c0 = [0]; for (var z=1; z<=mm; z++) c0.push(INF);
+    var bk0 = []; for (var z2=0; z2<=mm; z2++) bk0.push(-1);
+    best.push(c0); back.push(bk0);
+    for (var k2=1; k2<=K; k2++){
+      var c = [], bk = [];
+      for (var z3=0; z3<=mm; z3++){ c.push(INF); bk.push(-1); }
+      for (var j=minlen*k2; j<=mm; j++){
+        for (var i=minlen*(k2-1); i<=j-minlen; i++){
+          if (best[k2-1][i] === INF) continue;
+          var v = best[k2-1][i] + cost(i,j);
+          if (v < c[j]){ c[j] = v; bk[j] = i; }
+        }
+      }
+      best.push(c); back.push(bk);
+    }
+    if (best[K][mm] === INF) return null;
+    var bps = [], jj = mm;
+    for (var kk=K; kk>=1; kk--){ var ii = back[kk][jj]; if (ii > 0) bps.push(ii); jj = ii; }
+    return bps.reverse();
+  }
+  // End-to-end slope of output between two POINT indices - the block gain, in the units the
+  // plot draws: CARROTS per plant per year, not harvests. `out` is harvest actions per year
+  // and `crop` is vegYield(out), which is smaller by yieldMod*baseYield/100 (~9.6x for
+  // carrots), so a gain taken from `out` overstates the slope of the curve on screen by that
+  // factor. `crop` is rounded, but a ramp spans hundreds of plants, so the +-0.5 rounding is
+  // a few thousandths per plant.
+  function segGain(p0, p1){
+    var dn = P[p1].n - P[p0].n;
+    return dn > 0 ? (P[p1].crop - P[p0].crop) / dn : 0;
+  }
+  // 1. collapse, from the three-level fit A C D - C above half of A, D below half of both
+  var s3 = null, c3 = 0;
+  for (var q1=2; q1<=m-4; q1++){
+    var A3 = mgain(0, q1);
+    for (var q2=q1+2; q2<=m-2; q2++){
+      var C3 = mgain(q1, q2), D3 = mgain(q2, m);
+      if (!(C3 > DIP*A3) || !(D3 < DIP*Math.min(A3, C3))) continue;
+      var e3 = mcost(0, q1) + mcost(q1, q2) + mcost(q2, m);
+      if (s3 === null || e3 < s3){ s3 = e3; c3 = q2; }
+    }
+  }
+  var coll = (s3 === null) ? null : c3;
+  // Kept as a fallback: the four-level pass below can push the collapse later, and on a curve
+  // whose tail is noise (cabbages at 3 years: flat from 410 out to 1200) it chases that noise
+  // and lands where ramp 2 has no room left. The three-level answer is the honest one there.
+  var coll3 = coll;
+  // A four-level fit that also separates the trough, believed only if it buys GAIN_MIN of
+  // the three-level error. The error of the best split at each collapse point is kept, so
+  // the earliest collapse within TOL of the best can be taken instead of the very lowest.
+  if (m <= FOUR_MAX){
+    var s4 = null, prof = [];
+    for (var r1=2; r1<=m-4; r1++){
+      var A4 = mgain(0, r1);
+      for (var r2=r1+1; r2<=m-4; r2++){
+        var base = mcost(0, r1) + mcost(r1, r2), B4 = mgain(r1, r2);
+        for (var r3=r2+2; r3<=m-2; r3++){
+          var C4 = mgain(r2, r3), D4 = mgain(r3, m);
+          if (!(C4 > DIP*A4) || !(D4 < DIP*Math.min(A4, C4))) continue;
+          if (r2 > r1 && B4 >= DIP*Math.min(A4, C4)) continue;
+          var e4 = base + mcost(r2, r3) + mcost(r3, m);
+          if (s4 === null || e4 < s4) s4 = e4;
+          if (prof[r3] === undefined || e4 < prof[r3]) prof[r3] = e4;
+        }
+      }
+    }
+    if (s4 !== null && (s3 === null || (s3 - s4) > GAIN_MIN*s3)){
+      var mn = Infinity, peak = null, r4;
+      for (r4=0; r4<=m; r4++) if (prof[r4] !== undefined && prof[r4] < mn) mn = prof[r4];
+      for (r4=0; r4<=m; r4++){
+        if (prof[r4] !== undefined && prof[r4] <= mn*(1+TOL)){ peak = r4; break; }
+      }
+      if (peak !== null) coll = peak;
+    }
+  }
+  // Steps 2-4 for one collapse position. A closure because the position is not always the
+  // one the collapse search settled on: when the four-level split has moved it too far right
+  // for a ramp 2 to fit, the three-level position is tried rather than reporting no regions.
+  function rampsAt(coll){
+    var pre_g = g.slice(0, coll);
+    // 2. two ramps below the collapse, with a trough only if it really is one
+    var one = bestBreaks(pre_g, 2, 2);
+    var two = bestBreaks(pre_g, 3, 1);
+    var b1 = null, dipLo = null, dipHi = null;
+    if (two && two.length === 2){
+      var L = mgain(0, two[0]), M = mgain(two[0], two[1]), R = mgain(two[1], coll);
+      if (M < DIP_TROUGH*Math.min(L, R)){ dipLo = two[0]; dipHi = two[1]; b1 = two[0]; }
+    }
+    if (b1 === null){
+      if (!one || one.length !== 1) return null;
+      b1 = one[0];
+    }
+    if (b1 < 2 || (dipHi !== null ? dipHi : b1) > coll-2) return null;
+    var hi1 = (dipHi !== null) ? dipLo : b1;
+    var lo2 = (dipHi !== null) ? dipHi : b1;
+    return {
+      ok:true,
+      collapseN:P[coll].n,
+      ramp1:{loN:P[0].n, hiN:P[hi1].n, loIdx:0, hiIdx:hi1,
+             loCrop:P[0].crop, hiCrop:P[hi1].crop, loOut:P[0].out, hiOut:P[hi1].out,
+             gain:segGain(0,hi1)},
+      ramp2:{loN:P[lo2].n, hiN:P[coll].n, loIdx:lo2, hiIdx:coll,
+             loCrop:P[lo2].crop, hiCrop:P[coll].crop, loOut:P[lo2].out, hiOut:P[coll].out,
+             gain:segGain(lo2,coll)},
+      dip: (dipHi !== null) ? {loN:P[dipLo].n, hiN:P[dipHi].n} : null
+    };
+  }
+  // The four-level collapse first (it is the one that separates a real trough), then the
+  // three-level one if that produced nothing.
+  var tries = (coll !== null && coll !== coll3) ? [coll, coll3] : [coll];
+  for (var tr=0; tr<tries.length; tr++){
+    var cTry = tries[tr];
+    if (cTry === null || cTry < 3 || cTry > m-1) continue;
+    var made = rampsAt(cTry);
+    if (made) return made;
   }
   return null;
 }
@@ -1342,45 +1937,61 @@ function finishLimit(){
   // plot shows; peakOut is the harvest count at whichever plant count won, so the
   // panel can still quote both halves.
   for (var p=0; p<pts.length; p++) if (pts[p].crop > peakCrop){ peakCrop = pts[p].crop; peakOut = pts[p].out; peakN = pts[p].n; }
-  // Where the curve stops paying: the smallest plant count already within
-  // KNEE_FRAC of the best output measured. This is a sampled point, not an
-  // interpolation between two, so it lands on whatever the search happened to
-  // measure near the crossing - hence no claim finer than the local sampling.
-  var kneeN = null, kneeOut = 0, kneeCrop = 0;
-  for (var q=0; q<pts.length; q++) if (pts[q].crop >= peakCrop*KNEE_FRAC){ kneeN = pts[q].n; kneeOut = pts[q].out; kneeCrop = pts[q].crop; break; }
-  // Recommended minimum: the largest count still turning over at the crop's full rate.
-  // Ascending points, so the last one that still clears the threshold wins.
-  var recThresh = TURNOVER_FULL[CFG.growTicks] || TURNOVER_FULL[70];
-  var recMinN = null, recMinCrop = 0, recMinOut = 0;
+  // Peak is the maximum of the measured points, ties going to the smaller count. No
+  // interpolation and no separate search: it is simply the best point on the grid.
+  // The 95% knee is no longer reported. Its measurement phase is untouched - that walk is
+  // what densely re-reads counts near the peak and is why peakN is trustworthy - but none
+  // of it reaches the panel, the plot or the log any more.
+  // The recommended operating range, bracketed by two DIFFERENT quantities:
+  //
+  //   Max Size with Peak Land Efficiency - the largest count still turning over at the crop's
+  //   full rate, measured as harvest actions per spot per year against a per-crop threshold
+  //   (see PLE_TURNOVER). Below it, every spot is still earning its keep.
+  //
+  //   The green bands (OUTPUT RAMPS) are derived from output instead - see outputRamps().
+  //
+  // If nothing qualifies, the bound stays null and is reported as absent rather than
+  // silently rounded to an endpoint.
+  // Max Size with Peak Land Efficiency - the largest count still turning over at the crop's
+  // full rate. `turn` is harvest actions per spot per year, so this asks for the largest
+  // yard whose every spot is still producing at the rate the crop's cycle allows.
+  //
+  // Cabbages carry 2.5 rather than the 2.0 this table used to hold. Their cycle is
+  // 134.194 days, which leaves only 6.61 days of slack in a 275-day working year - 4.9% of a
+  // cycle - so a cabbage spot does not settle on a fixed throughput: it lands on 2 or 3
+  // harvests per year depending on where in the year its cycle lands. 2.0 was the FLOOR of
+  // that oscillation, so it under-counted a yard whose spots typically reach 2.5; 2.5 is the
+  // middle of the range actually observed. See the cycle arithmetic in turnoverMax().
+  //
+  // Keyed by growTicks, which is what identifies the crop here (70/98/126).
+  var pleTurnThresh = PLE_TURNOVER[CFG.growTicks] || PLE_TURNOVER[70];
+  var pleN = null, pleCrop = 0, pleOut = 0, pleIdx = -1;
   for (var r2=0; r2<pts.length; r2++)
-    if ((pts[r2].turn||0) >= recThresh){ recMinN = pts[r2].n; recMinCrop = pts[r2].crop; recMinOut = pts[r2].out; }
+    if ((pts[r2].turn||0) >= pleTurnThresh){ pleN = pts[r2].n; pleCrop = pts[r2].crop; pleOut = pts[r2].out; pleIdx = r2; }
+  // OUTPUT RAMPS - the green bands. Both come from outputRamps(), which fits the marginal
+  // gain rather than turnover; the reasoning lives with that function. PLE above stays
+  // turnover-based and deliberately independent: PLE asks "how large a yard still turns
+  // over at the crop's full rate", the ramps ask "where is output still climbing", and the
+  // two are measured from different quantities on purpose.
+  var ramps = outputRamps(pts);
   // The maximum is enclosed only if the scan's own limit was reached rather than
   // bumped into, and the best count sits strictly inside that limit. Sitting ON the
   // limit means it may lie further out - and the limit is itself a judgement, the count
   // where PPSU crosses LIMIT_PPSU, so nothing above it was ever searched.
   var bracketed = !!R.capSet && !R.capAtCeiling && peakN < R.capN;
-  var used = R.sims;
-  // What the plain walk would have cost to reach the same peak: every LIMIT_STEP count
-  // from the floor up to it.
-  var naive = Math.max(0, Math.round((peakN - R.lo) / LIMIT_STEP)) + 1;
   limitFit = {pts:pts, peakOut:peakOut, peakCrop:peakCrop, peakN:peakN,
-              kneeN:kneeN, kneeOut:kneeOut, kneeCrop:kneeCrop,
-              recMinN:recMinN, recMinCrop:recMinCrop, recMinOut:recMinOut,
+              pleN:pleN, pleCrop:pleCrop, pleOut:pleOut,
+              ramps:ramps,
               bracketed:bracketed,
               hardTop:PLANT_HARD, square:R.square, sig:'',
               simLabel:R.simLabel,
               capN:R.capN, capAtCeiling:!!R.capAtCeiling, ppsuLimit:LIMIT_PPSU,
-              debug:{used:used, naive:naive, saved:naive - used,
-                     pct:(naive > 0 ? Math.round(100*(naive-used)/naive) : 0),
-                     floor:R.lo, last:pts[pts.length-1].n, peakN:peakN,
-                     kneeN:kneeN, kneeWalk:R.kneeWalk, leftWalk:R.leftWalk,
-                     capN:R.capN, capAtCeiling:!!R.capAtCeiling, ppsuLimit:LIMIT_PPSU},
               step:LIMIT_STEP, rows:R.keep.ROWS, nw:NW, families:families};
   // Leave the setup on the measured optimum rather than the pre-sweep count, so the
   // timelines and grids show the yard at its ceiling. Only the inputs need setting:
   // refresh() re-reads them (clamping to the slider range), and N itself is not part
   // of the sweep's settings signature, so the curve stays valid.
-  var endN = Math.max(plantMin(), Math.min(plantsCap(), peakN));
+  var endN = Math.max(plantMin(), Math.min(plantCeil(), peakN));
   var nnEl = document.getElementById('nNum'), nsEl = document.getElementById('nSlider');
   if (nnEl) nnEl.value = String(endN);
   if (nsEl) nsEl.value = String(endN);
@@ -1395,6 +2006,7 @@ function finishLimit(){
   if (window.__profile){ window.__profile.sim = logSweepMs; paintProfilePill(); }
   // A run that is not log-worthy is simply not logged; no message for that.
   if (logWorthy()) appendLogRow().then(function(r){
+    if (r.ok) appendSweepCsv().then(function(r2){ if (r2.ok) logNotice(r.msg+' + '+r2.msg); });
     logNotice(r.msg, !r.ok);
     if (!r.ok) console.warn('[run log] '+r.msg);
   });
@@ -1403,9 +2015,246 @@ function finishLimit(){
 // YieldMod, Time to Refuel, every datamined value - and varies only the plant count.
 // It climbs the LIMIT_C1 grid until PPSU falls below LIMIT_PPSU, interpolates that
 // crossing as the scan limit, discards higher counts, then fills inward at LIMIT_STEP.
+// ------------------------------------------------------- keep-alive audio
+// Chrome and Firefox throttle timers in a window that is minimised, occluded or
+// backgrounded, and the sweep hands control back to the event loop between every plant
+// count, so each step can pick up a full second of throttle - or a whole minute once
+// the page counts as silent for long enough. A page that is actually producing audio is
+// exempt from the worst of that, so a tone far below hearing keeps the page classified
+// as audible while a long run is in progress. Roughly -80 dB: inaudible at any volume.
+//
+// This works around a heuristic, it does not fix anything, and it cannot help if the
+// browser freezes the tab outright - a frozen page runs no tasks at all. Autoplay rules
+// also require a user gesture, so it is started from the Find limit click rather than on
+// load. The only thing it is genuinely good for is telling us whether throttling was the
+// cause of a slow sweep, by seeing whether removing it changes anything.
+var kaCtx = null, kaNode = null;
+// Chosen with throttle_test.html: a 20 ms, 60 Hz blip once every 2 s at 0.001. Beeps
+// rather than a steady tone because loudness falls with duty cycle, and this is a 1%
+// duty cycle - far less noticeable than a continuous sine at the same peak level.
+//
+// The pattern is a LOOPING BUFFER, not a timer that fires beeps, and that is the part
+// that matters: a timer-driven beep would be throttled the moment the page lost its
+// exemption, which is exactly when it needs to keep making noise. A looping buffer
+// repeats on the audio clock, where nothing can stall it.
+//
+// Worth recording: the tab's audio indicator is no guide at all. It never appeared at any
+// level or pattern tried, even while the sweep demonstrably kept its speed in the
+// background. What matters is the context existing and running.
+var KA_GAIN = 0.001, KA_FREQ = 60, KA_BEEP_MS = 20, KA_GAP_MS = 2000;
+var kaCtx = null, kaSrc = null, kaGain = null;
+function keepAliveStart(){
+  if (kaCtx){ if (kaCtx.state === 'suspended') kaCtx.resume(); return true; }
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return false;
+  try {
+    kaCtx = new AC();
+    var rate = kaCtx.sampleRate;
+    var len  = Math.max(64, Math.floor(rate * KA_GAP_MS/1000));
+    var buf  = kaCtx.createBuffer(1, len, rate);
+    var d    = buf.getChannelData(0);
+    var bl   = Math.min(len-1, Math.max(1, Math.floor(rate * KA_BEEP_MS/1000)));
+    for (var i=0; i<bl; i++) d[i] = Math.sin(2*Math.PI*KA_FREQ*i/rate) * KA_GAIN;
+    // Raised-cosine edges. At 60 Hz across 20 ms the blip is barely one full cycle, so
+    // these do most of the shaping; without them it clicks instead of thudding.
+    var f = Math.max(2, Math.floor(rate*0.004));
+    for (var j=0; j<f && j<bl; j++){
+      var w = 0.5 - 0.5*Math.cos(Math.PI*j/f);
+      d[j] *= w; d[bl-1-j] *= w;
+    }
+    kaSrc = kaCtx.createBufferSource();
+    kaSrc.buffer = buf; kaSrc.loop = true;
+    kaGain = kaCtx.createGain(); kaGain.gain.value = 1;    // level is already in the buffer
+    kaSrc.connect(kaGain); kaGain.connect(kaCtx.destination);
+    kaSrc.start();
+    if (kaCtx.state === 'suspended') kaCtx.resume();
+    return true;
+  } catch (e){ kaCtx = null; kaSrc = null; kaGain = null; return false; }
+}
+function keepAliveStop(){
+  if (!kaCtx) return;
+  try { if (kaSrc){ kaSrc.stop(); kaSrc.disconnect(); } kaCtx.close(); }
+  catch (e){}
+  kaCtx = null; kaSrc = null; kaGain = null;
+}
+// Autoplay rules can leave the context suspended even from a click, and a suspended
+// context produces no samples at all - which looks identical, from outside, to the hack
+// not working. Nudging it each step recovers it.
+function keepAliveTick(){
+  if (!kaCtx) return '';
+  if (kaCtx.state === 'suspended') kaCtx.resume().then(function(){}, function(){});
+  return kaCtx.state;
+}
+// ---------------------------------------------------------------- parallel sweep
+// The fill is a batch job: every count in it is an independent simulation that differs
+// only in N, so it runs across a pool of workers instead of one at a time. The coarse
+// climb stays on this thread because each 500-step sample decides whether to keep going.
+//
+// The worker is built from this page's OWN script text between the two markers, so there
+// is no second copy of the simulation to drift out of step. Everything in that range is
+// plain data and pure functions - stats() and limitSig() inside it touch the DOM, but a
+// worker never calls them. Setup is sent once per worker and each step is one number.
+var simPool = null, simPoolSize = 0, simPoolError = null, simLastNote = null;
+var WC_BEGIN = '//==WORKER-CORE-BEGIN==', WC_END = '//==WORKER-CORE-END==';
+var WORKER_GLUE =
+  'stats=function(){};'+  // simulate() ends by calling stats() to repaint the panel; in
+  'self.onmessage=function(ev){var d=ev.data;try{'+
+  'if(d.setup){CFG=d.setup.CFG;CFG_YM=d.setup.CFG_YM;baseYield=d.setup.baseYield;'+
+  'cropName=d.setup.cropName;cropColor=d.setup.cropColor;families=d.setup.families;'+
+  'NW=d.setup.NW;CROP_BASEYIELD=d.setup.CROP_BASEYIELD;CROP_NAME=d.setup.CROP_NAME;'+
+  'ADV_MODE=!!d.setup.ADV;'+
+  'self.postMessage({ready:true});return;}'+
+  'N=d.n;ROWS=d.square?autoRows(N):d.rowsFixed;COLS=Math.max(1,Math.ceil(N/ROWS));'+
+  'computeGolden();var t0=performance.now();simulate();'+
+  'var pt=measureRun(aggregate());'+
+  'self.postMessage({n:d.n,pt:pt,ms:performance.now()-t0});'+
+  '}catch(e){self.postMessage({n:d.n,err:String((e&&(e.stack||e.message))||e)});}};';
+function workerCoreSource(){
+  var el = document.getElementById('appscript');
+  if (!el) return null;
+  var t = el.textContent;
+  // Anchored on newlines. The marker text also appears inside the string literals that
+  // name these two constants, and those sit hundreds of lines EARLIER in the file than
+  // the real END marker - a plain indexOf would cut the core short at the literal.
+  var a = t.indexOf('\n' + WC_BEGIN + '\n');
+  var b = t.indexOf('\n' + WC_END + '\n');
+  if (a < 0 || b < 0 || b <= a) return null;
+  return t.slice(a + 1, b) + '\n' + WORKER_GLUE;
+}
+function ensurePool(){
+  if (simPool) return simPool;
+  var src = workerCoreSource();
+  if (!src) return null;
+  var url;
+  try { url = URL.createObjectURL(new Blob([src], {type:'application/javascript'})); }
+  catch (e){ return null; }
+  // Leave a couple of cores for the browser and the UI thread. Each worker holds a whole
+  // simulation state, so the pool is deliberately not "every core".
+  var size = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 2));
+  var pool = [];
+  for (var i=0; i<size; i++){
+    try {
+      var w = new Worker(url);
+      w.__ready = false; w.__busy = false;
+      w.onmessage = simWorkerMessage;
+      w.onerror = simWorkerError;
+      pool.push(w);
+    } catch (e){ break; }
+  }
+  if (!pool.length) return null;
+  simPool = pool; simPoolSize = pool.length;
+  sendSetup();
+  return pool;
+}
+// The pool outlives any single sweep. Without this, workers keep running the FIRST
+// sweep's configuration - a stale crop, sim length or family count - so the fill points
+// on the curve would be measured under different rules from the coarse points and from the
+// per-year panel. Re-sent every sweep; postMessage is ordered per worker, so each setup
+// lands ahead of the step messages that follow it.
+function sendSetup(){
+  if (!simPool || !simPool.length) return;
+  var setup = {CFG:CFG, CFG_YM:CFG_YM, baseYield:baseYield, cropName:cropName,
+               cropColor:cropColor, families:families, NW:NW, ADV:ADV_MODE,
+               CROP_BASEYIELD:CROP_BASEYIELD, CROP_NAME:CROP_NAME};
+  for (var j=0; j<simPool.length; j++){
+    try { simPool[j].postMessage({setup:setup}); }
+    catch (e){ simFallBack({parDone:true}, 'setup failed: '+((e && e.message) || e)); return; }
+  }
+}
+function pumpBatch(R, w){
+  if (!R.queue || !R.queue.length || !w.__ready || R.parDone || w.__busy) return;
+  var n = R.queue.shift();
+  w.__busy = true;
+  w.postMessage({n:n, square:R.square, rowsFixed:R.keep.ROWS});
+}
+function paintBatch(R){
+  var pct = R.pendTotal ? Math.round(100*R.got/R.pendTotal) : 100;
+  // Price the remaining queue by PLANTS, not by a mean of the samples received so far.
+  // Dispatch is longest-first, so the early results are the biggest yards - and a mean
+  // over them multiplied by the count still to run assumes the rest are just as heavy.
+  // For the 50..2130 grid those 8 largest counts are under 5% of the total plants, so that
+  // estimate opened at several hundred seconds against a run that takes well under a
+  // minute. A per-plant rate from whatever has come back prices the queue correctly from
+  // the first result instead.
+  var eta = '', remP = 0;
+  if (R.queue) for (var q=0; q<R.queue.length; q++) remP += R.queue[q];
+  if (remP > 0 && R.gotMs > 0 && R.gotPlants > 0){
+    // Divided by the pool: a per-plant rate gives CPU-seconds, and the point of the
+    // pool is that eight of those happen at once.
+    var left = (R.gotMs / R.gotPlants) * remP / 1000 / Math.max(1, simPoolSize);
+    if (left < 0.2) left = 0.2;
+    eta = ' \u00b7 ~'+(left < 10 ? left.toFixed(1) : Math.round(left))+'s left';
+  }
+  showProgress(true, 'Performing Simulation Sweep '+R.got+'/'+R.pendTotal+
+    ' \u00b7 '+simPoolSize+' threads in parallel \u00b7 '+pct+'% received'+eta);
+  document.title = TITLE_IDLE+' '+R.got+'/'+R.pendTotal+eta;
+}
+function simFallBack(R, why){
+  if (R.parDone) return;
+  R.parFailed = true; R.pend = 0; R.queue = null; R.parDone = true;
+  if (R.guard){ clearTimeout(R.guard); R.guard = null; }
+  if (R.note == null) R.note = why;
+  simLastNote = why;
+  setTimeout(limitStep, 0);
+}
+function simWorkerMessage(ev){
+  var w = this, d = ev.data;
+  // The ready handshake is answered BEFORE the sweep is consulted: the pool is built when
+  // the first Find limit is pressed, which is before limitRun exists, so an early
+  // "no run" return here would swallow the handshake and every worker would sit idle.
+  if (d.ready){ w.__ready = true; if (limitRun && !w.__busy) pumpBatch(limitRun, w); return; }
+  var R = limitRun;
+  if (!R) return;
+  w.__busy = false;
+  if (d.err){ simFallBack(R, 'worker error: '+d.err); return; }
+  if (R.parDone) return;                     // batch already consumed or abandoned
+  d.pt.__w = true;                          // "came from a worker": count it once
+  R.data[d.n] = d.pt;
+  R.got++;
+  R.gotMs += d.ms;
+  R.gotPlants += d.n;
+  R.sims++;      // a worker's run is a simulation: count it, or the
+                       // denominator and the reported total both go wrong
+  if (d.ms > R.tMax) R.tMax = d.ms;
+  if (R.tMin < 0 || d.ms < R.tMin) R.tMin = d.ms;
+  R.pend--; if (R.pend < 0) R.pend = 0;
+  paintBatch(R);
+  if (R.pend <= 0){ R.parDone = true; setTimeout(limitStep, 0); }
+  else pumpBatch(R, w);
+}
+function simWorkerError(e){
+  simPoolError = 'worker failed: '+((e && e.message) || e);
+  simLastNote = simPoolError;
+  if (limitRun) simFallBack(limitRun, simPoolError);
+}
+function dispatchBatch(R, list){
+  if (!list.length) return;
+  var pool = ensurePool();
+  if (!pool){ R.parFailed = true; return; }
+  if (!R.sentSetup){ R.sentSetup = true; sendSetup(); }
+  R.queue = list.slice();
+  R.pend = list.length; R.pendTotal = list.length; R.got = 0; R.gotMs = 0; R.gotPlants = 0; R.parDone = false;
+  for (var i=0; i<pool.length; i++) pumpBatch(R, pool[i]);
+  // A worker that never becomes ready must not strand the sweep: fall back to the
+  // main thread, which is slower but always correct.
+  // Only a pool that never reported ready is genuinely broken. A worker that is ready but
+  // still chewing on a large yard is slow, not dead, so it must not trigger the fallback.
+  var guardTick = function(){
+    if (limitRun !== R || R.parDone || R.got > 0) return;
+    var anyReady = false;
+    for (var k=0; k<simPool.length; k++) if (simPool[k].__ready) anyReady = true;
+    if (!anyReady){ simFallBack(R, 'workers never became ready'); return; }
+    R.guard = setTimeout(guardTick, 4000);
+  };
+  R.guard = setTimeout(guardTick, 4000);
+}
+
 var sweepStarting = false;
 async function startLimitSweep(){
   if (limitRun){ stopLimitSweep(true); return; }   // click again to stop
+  // Started first, while the click that opened this is still a live gesture - the audio
+  // context needs one, and after the await below the gesture is spent.
+  keepAliveStart();
   if (sweepStarting) return;                        // picker still open
   // Claim the folder BEFORE any work starts. The picker needs this click's gesture, and
   // the sweep previously ran on behind the open dialog - fast enough to finish before
@@ -1414,6 +2263,12 @@ async function startLimitSweep(){
   await claimLogFolder();
   sweepStarting = false;
   if (!logDir) logNotice('run log off - no folder chosen, so nothing will be written', false);
+  // The spinner fields refresh on a debounce, so a value typed just before this click may
+  // still be waiting in simTimer. Apply the pending edit here instead of dropping it: the
+  // sweep is about to simulate, and it must use the length the fields now show.
+  if (simTimer){ clearTimeout(simTimer); simTimer = null; }
+  nSliderMaxCap = null;      // this sweep decides the ceiling afresh
+  pullCfg();
   var sl = document.getElementById('nSlider');
   var lo = Math.max(plantMin(), Math.round(parseFloat(sl.min) || plantMin()));
   var sq = document.getElementById('makeSquare').checked;
@@ -1429,12 +2284,14 @@ async function startLimitSweep(){
   nSliderMaxCap = null;      // this sweep decides the ceiling afresh
   limitRun = {lo:lo, phase:'c1', next:lo, prev:lo, prevPpsu:Infinity, curN:lo,
               capN:0, capSet:false, capAtCeiling:false, fillHi:0, fillLo:0, fillSide:1,
-              kneeAt:0, kneeN:0, kneeWalk:0, leftWalk:0,
-              seen:{}, data:{}, sims:0, total:0, best:0, bestN:0,
+                seen:{}, data:{}, sims:0, total:0,
               t0:performance.now(), tMin:-1, tMax:0, pts:[],
+              pend:0, pendTotal:0, got:0, gotMs:0, gotPlants:0, queue:null, parDone:false,
+              parFailed:false, guard:null, note:null,
               square:sq, simLabel:simLabel,
               keep:{N:N, ROWS:ROWS, COLS:COLS, g:goldenMask}};
   skipStats = true;        // the sweep reads its own aggregate; do not repaint
+  setBusy(true);           // the sweep calls simulate() itself, not through withProgress
   showProgress(true, 'Finding scan limit '+limitRun.lo+' \u00b7 bracketing');
   wireLimitBtn();
   limitStep();
@@ -1468,6 +2325,10 @@ function limitRemaining(R){
 }
 function stopLimitSweep(silent){
   if (!limitRun) return;
+  if (limitRun.guard){ clearTimeout(limitRun.guard); limitRun.guard = null; }
+  if (limitRun.queue) limitRun.queue = null;
+  keepAliveStop();       // the sweep is over; nothing left to keep awake
+  setBusy(false);
   var k = limitRun.keep;
   limitRun = null;
   skipStats = false;        // before refresh(), which must repaint as normal
@@ -1497,6 +2358,9 @@ function stopLimitSweep(silent){
 function limitStep(){
   if (!limitRun) return;
   var R = limitRun;
+  // A dispatched batch has to land before the walk moves again. limitNextN CONSUMES
+  // counts as it advances, so noticing the wait afterwards would silently skip one.
+  if (R.pend > 0){ paintBatch(R); return; }
   var n = limitNextN();
   if (n == null){ finishLimit(); return; }
   N = n;
@@ -1507,10 +2371,14 @@ function limitStep(){
   COLS = Math.max(1, Math.ceil(n / ROWS));      // same geometry rule as applyLayout
   computeGolden();
   var pt;
-  if (R.seen[n] && R.data[n]) {
-    // Already measured: reuse the stored reading. Re-running it would burn another
-    // simulation and push progress past an exact denominator.
+  if (R.data[n]) {
+    // Already measured: either an earlier step, or a worker in the parallel batch.
+    // Re-running it would burn another simulation and push progress past an exact
+    // denominator. `seen` is set on CONSUMPTION, not on arrival, because the fill walk
+    // skips anything already seen and would otherwise step straight over the whole batch.
     pt = R.data[n];
+    R.seen[n] = true;
+    if (pt.__w){ R.pts.push(pt); pt.__w = false; }
   } else {
     var tA = performance.now();
     simulate();
@@ -1527,8 +2395,6 @@ function limitStep(){
   }
   R.lastPpsu = pt.ppsuPct;
   // Compared on crops, the series the plot shows and the one the peak is read off.
-  var better = pt.crop > R.best;
-  if (better){ R.best = pt.crop; R.bestN = n; }
   if (R.phase === 'c1'){
     // Keep climbing while PPSU holds. The moment it drops under LIMIT_PPSU the yard has
     // outgrown the crew, so stop climbing and settle the limit by interpolating back to
@@ -1557,29 +2423,26 @@ function limitStep(){
       // Throw away everything above the limit and re-read the best from what is left,
       // so a higher count measured on the way up cannot survive as the answer.
       R.pts = R.pts.filter(function(q){ return q.n <= R.capN; });
-      R.best = 0; R.bestN = 0;
       for (var rb=0; rb<R.pts.length; rb++)
-        if (R.pts[rb].crop > R.best){ R.best = R.pts[rb].crop; R.bestN = R.pts[rb].n; }
       R.total = limitSweepTotal(R);
       R.phase = 'fill';
+      // The limit is fixed, so the entire remaining list is known before a single one of
+      // them runs. Hand the whole thing to the pool in one go.
+      var batch = [];
+      for (var bq = R.lo; bq <= R.capN; bq += LIMIT_STEP)
+        if (!R.seen[bq] && !R.data[bq]) batch.push(bq);
+      // Longest-processing-time-first: the biggest yards are the slowest
+      // simulations, so start them and fill the tail with cheap ones. Makespan is set by
+      // the longest job, and ascending order deliberately queues it last. Consumption
+      // order is untouched, so tie-breaking and results are unchanged.
+      batch.reverse();
+      dispatchBatch(R, batch);
     } else {
       R.prev = n; R.next = n + LIMIT_C1; R.prevPpsu = pt.ppsuPct;
     }
-  } else if (R.phase === 'left'){
-    R.leftWalk++;
-    if (pt.crop >= R.best){ R.bestN = n; }           // still the maximum: keep going left
-    else { R.phase = 'knee'; R.kneeAt = R.bestN; R.kneeN = R.bestN; R.kneeWalk = 0; }
-  } else if (R.phase === 'knee'){
-    // Walking back down past the 95% crossing, purely to lay down LIMIT_STEP-sized
-    // samples below the peak. finishLimit reports the FIRST sample at or above the
-    // threshold, so where this walk has been, the crossing is resolved to 10 plants;
-    // where it has not, it is only resolved to whatever grid covers that stretch.
-    R.kneeWalk++;
-    if (better){ R.bestN = n; R.kneeAt = n; R.kneeN = n; R.kneeWalk = 0; }
-    else if (pt.crop >= R.best * KNEE_FRAC){ R.kneeN = n; }
-    else R.phase = 'done';
   }
   var done = R.sims;
+  keepAliveTick();          // a suspended context produces no samples; nudge it
   // Two questions, so two labels. Before the crossing there is no scan limit to
   // report, and the number on the pill is the yard size being measured - the frontier
   // the climb has reached, which is the very quantity the limit is being sought for.
@@ -1593,6 +2456,7 @@ function limitStep(){
                    ' \u00b7 PPSU '+(R.lastPpsu==null?'?':R.lastPpsu.toFixed(0))+'%'+
                    (R.capSet ? ' \u00b7 limit '+R.capN : '')+
                    etaText(R, limitRemaining(R)));
+  setTitleSweep(R);
   setTimeout(limitStep, 0);
 }
 // The grip is SVG rebuilt on every panel repaint, so the handler is re-attached after
@@ -1729,10 +2593,23 @@ function paintProfilePill(){
 // log for the session; nothing else is affected.
 var logDir = null;          // FileSystemDirectoryHandle for the folder that holds log/
 var logSweepMs = 0;         // wall-clock of the sweep that just finished
-var LOG_HEADER = ['Crop','Families','Workers','Make Square','YieldMod',
-                  'Abs Max (Harvests)','95% Max (Harvests)','Rec Min (Harvests)',
-                  'Abs Max (Qty)','95% Max (Qty)','Rec Min (Qty)',
-                  'Sim Length','Sim Time (s)','Timestamp'];
+// The (Plants) columns are the count at each optimum; the (Veg /yr) columns are what the
+// yard delivers at the top of that span; the (/100Plants /worker /yr) columns are the
+// gradient there, rescaled to 100 plants and divided by the worker count. Harvest counts
+// are deliberately not recorded - they are recoverable from the veg figure and YieldMod,
+// and carrying both invites the two to drift apart when the yield changes.
+// The old "Max Size with Peak Land Efficiency" point is gone from the log; PLE and GLLE are
+// spans now, and Abs_Max is the only single-point optimum left.
+var LOG_HEADER = ['Game Version','Crop','Families','Workers','Make Square','YieldMod',
+                  'Plant Row Count','Refuel Day','Refuel Time','Re-water Day','Re-water Time',
+                  'Sim Length (yr)',
+                  'PLE_Min (Plants)','PLE_Max (Plants)','GLLE_Min (Plants)','GLLE_Max (Plants)',
+                  'Abs Max (Plants)',
+                  'PLE_Max Veg (/yr)','GLLE_Max Veg (/yr)','Abs Max Veg (/yr)',
+                  'PLE Veg (/100Plants /worker /yr)','GLLE Veg (/100Plants /worker /yr)',
+                  'Abs_Max (/100Plants /worker /yr)',
+                  'Sim Time (s)','Timestamp'];
+var GAME_VERSION = '0.8.104';
 // Must be called synchronously from a click handler: the body runs up to the await, and
 // the picker call itself is what needs the gesture.
 async function claimLogFolder(){
@@ -1757,6 +2634,19 @@ function csvCell(v){
   var t = String(v);
   return /[",\r\n]/.test(t) ? '"'+t.replace(/"/g,'""')+'"' : t;
 }
+// Timestamp in the reader's own timezone rather than UTC, so a row means what it says
+// when you look at it. Carries the offset explicitly: local wall-clock time alone is
+// ambiguous twice a year, and without an offset the column stops sorting correctly the
+// moment the offset changes. Same shape as toISOString, so the file still reads as ISO.
+function localStamp(){
+  var d = new Date();
+  function p(n,w){ n = String(n); while (n.length < (w||2)) n = '0'+n; return n; }
+  var mins = -d.getTimezoneOffset();
+  var sign = mins < 0 ? '-' : '+', a = Math.abs(mins);
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+
+         p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())+'.'+p(d.getMilliseconds(),3)+
+         sign+p(Math.floor(a/60))+':'+p(a%60);
+}
 // Nested sort on the first four columns: Crop, Families, Workers, Make Square. Compared
 // numerically wherever both sides parse as numbers, so Workers 6 lands after 4 rather
 // than after 40 alphabetically. Rows arrive as CSV LINES, not arrays, so they are split
@@ -1766,7 +2656,9 @@ function sortLogRows(rows){
   return rows.sort(function(a,b){
     var A = (typeof a === 'string') ? a.split(',') : a;
     var B = (typeof b === 'string') ? b.split(',') : b;
-    for (var i=0; i<4; i++){
+    // Columns 1..4 = Crop, Families, Workers, Make Square. Column 0 is the game version,
+    // which is the same for every row in a session and would sort "0.8.104" as 0.8.
+    for (var i=1; i<5; i++){
       var x = (A[i] || '').replace(/^"|"$/g,''), y = (B[i] || '').replace(/^"|"$/g,'');
       var nx = parseFloat(x), ny = parseFloat(y);
       var c = (!isNaN(nx) && !isNaN(ny)) ? (nx - ny) : String(x).localeCompare(String(y));
@@ -1785,25 +2677,95 @@ function logWorthy(){
   return Math.round(parseFloat(capT.value) || 0) >= 3;
 }
 function logRowNow(){
-  var A = aggregate(), f = limitFit;
-  return [ cropName,
+  var A = aggregate(), f = limitFit, rp = f.ramps;
+  // Make Square derives the row count from the plant count, so there is no user-set row
+  // figure to record and NA says that plainly rather than logging a slider value the run
+  // did not actually use. Otherwise log the Row count control, not ROWS: ROWS can hold an
+  // autoRows() result, and the point of the column is what the setup asked for.
+  var sq = !!document.getElementById('makeSquare').checked;
+  var rowFixed = sq ? 'NA' : readNum('rowsSlider', 0, 0, 100000);
+  // The ramp gradient is veg per plant per year, so x100 is veg per 100 plants; dividing by
+  // the worker count says what one worker gets out of that stretch. Abs_Max has no gradient
+  // to quote - it is the top of the curve - so it falls back to the average yield there.
+  var per = function(g){ return NW ? (g*100/NW).toFixed(2) : ''; };
+  return [ GAME_VERSION,
+           cropName,
            families,
            NW,                                                              // total workers
-           String(!!document.getElementById('makeSquare').checked),
+           String(sq),
            CFG_YM,
-           f.peakOut.toFixed(0),
-           f.kneeN == null ? ''   : f.kneeOut.toFixed(0),
-           f.recMinN == null ? '' : f.recMinOut.toFixed(0),
-           f.peakCrop,
-           f.kneeN == null ? ''   : f.kneeCrop,
-           f.recMinN == null ? '' : f.recMinCrop,
-           A.nYears,                                                       // sim length, years
+           rowFixed,                                                        // Plant Row Count
+           CFG.refuelFirstDay,
+           CFG.refuel,
+           CFG.rewaterFirstDay,
+           CFG.rewater,
+           A.nYears,                                                        // Sim Length (yr)
+           rp ? rp.ramp1.loN : '',                                          // PLE_Min
+           rp ? rp.ramp1.hiN : '',                                          // PLE_Max
+           rp ? rp.ramp2.loN : '',                                          // GLLE_Min
+           rp ? rp.ramp2.hiN : '',                                          // GLLE_Max
+           f.peakN,                                                         // Abs Max (Plants)
+           rp ? rp.ramp1.hiCrop : '',                                       // PLE_Max Veg (/yr)
+           rp ? rp.ramp2.hiCrop : '',                                       // GLLE_Max Veg (/yr)
+           f.peakCrop,                                                      // Abs Max Veg (/yr)
+           rp ? per(rp.ramp1.gain) : '',                                    // PLE Veg /100Plants/worker/yr
+           rp ? per(rp.ramp2.gain) : '',                                    // GLLE Veg /100Plants/worker/yr
+           f.peakN > 0 ? (f.peakCrop/f.peakN*100/(NW||1)).toFixed(2) : '',  // Abs_Max /100Plants/worker/yr
            (logSweepMs/1000).toFixed(1),
-           new Date().toISOString() ].map(csvCell).join(',');
+           localStamp() ].map(csvCell).join(',');
 }
-// Read, append, re-sort by the first four columns, write the whole thing back. The file
+// Read, append, re-sort by Crop/Families/Workers/Make Square, write the whole thing back. The file
 // is one short table of numbers, so rewriting it wholesale is cheaper than reasoning
 // about where a row belongs.
+// The summary row answers "what did this yard do". It cannot answer "where did the
+// curve turn", because the curve itself is never written anywhere - it lives in
+// limitFit.pts and dies with the page. This writes every measured point so the shape of
+// a run can be re-read later without re-running it.
+var SWEEP_HEADER = ['Crop','Families','Workers','Make Square','YieldMod','Sim Length (y)',
+                    'Plants','Qty/yr','Harvests/yr','Turnover','WPSU %','PPSU %','Yield/Spot',
+                    'Grad Qty/100 Plants','Flag','Timestamp'];
+function sweepRowsNow(){
+  var f = limitFit, nYears = aggregate().nYears, rows = [], prev = null;
+  var sq = String(!!document.getElementById('makeSquare').checked);
+  for (var i=0; i<f.pts.length; i++){
+    var q = f.pts[i], flag = '';
+    if (q.n === f.peakN)   flag = 'ABS MAX';
+    if (q.n === f.pleN) flag = flag ? flag+' + PLE': 'PLE';
+    var rp = f.ramps;
+    if (rp){
+      if (q.n === rp.ramp1.loN) flag = flag ? flag+' + PLE MIN': 'PLE MIN';
+      if (q.n === rp.ramp1.hiN) flag = flag ? flag+' + PLE MAX': 'PLE MAX';
+      if (q.n === rp.ramp2.loN) flag = flag ? flag+' + GLLE MIN': 'GLLE MIN';
+      if (q.n === rp.ramp2.hiN) flag = flag ? flag+' + GLLE MAX': 'GLLE MAX';
+    }
+    var g = prev ? ((q.crop - prev.crop)/(q.n - prev.n)*100) : '';
+    rows.push([cropName, families, NW, sq, CFG_YM, nYears, q.n,
+               q.crop.toFixed(2), (q.out||0).toFixed(0), (q.turn||0).toFixed(3),
+               q.wpsuPct === undefined ? '' : q.wpsuPct.toFixed(1),
+               q.ppsuPct.toFixed(1),
+               q.n > 0 ? (q.crop/q.n).toFixed(4) : '',
+               g === '' ? '' : g.toFixed(3), flag, localStamp()].map(csvCell).join(','));
+    prev = q;
+  }
+  return rows;
+}
+async function appendSweepCsv(){
+  if (!limitFit || !limitFit.pts.length || !logDir) return {ok:false, msg:'sweep csv skipped'};
+  try {
+    if (typeof logDir.queryPermission === 'function'){
+      var perm = await logDir.queryPermission({mode:'readwrite'});
+      if (perm !== 'granted') perm = await logDir.requestPermission({mode:'readwrite'});
+      if (perm !== 'granted') return {ok:false, msg:'folder is read-only'};
+    }
+    var rows = SWEEP_HEADER.concat(sweepRowsNow());
+    var sub = await logDir.getDirectoryHandle('log', {create:true});
+    var h = await sub.getFileHandle('sweep.csv', {create:true});
+    var w = await h.createWritable();
+    await w.write(rows.join('\n')+'\n');
+    await w.close();
+    return {ok:true, msg:'wrote log\\sweep.csv ('+(rows.length-1)+' points)'};
+  } catch (e){ return {ok:false, msg:'sweep csv failed: '+((e && e.message)||e)}; }
+}
 async function appendLogRow(){
   if (!limitFit) return {ok:false, msg:'no completed sweep to log'};
   if (!logDir) return {ok:false, msg:'run log off - no folder chosen'};
@@ -1823,7 +2785,10 @@ async function appendLogRow(){
       var txt = await (await existing.getFile()).text();
       rows = txt.split(/\r?\n/).filter(function(l){ return l.length > 0; });
     }
-    if (!rows.length || rows[0].indexOf('Abs Max (Harvests)') < 0) rows.unshift(LOG_HEADER.join(','));
+    // The header goes in only when the file is new or empty. An existing log is taken
+    // at face value: an obsolete one is the user's to delete, and second-guessing rows
+    // this routine did not write would be worse than leaving them alone.
+    if (!rows.length) rows.unshift(LOG_HEADER.join(','));
     rows.push(logRowNow());
     rows = [rows[0]].concat(sortLogRows(rows.slice(1)));
     var h = await logFile(true);
@@ -1856,192 +2821,618 @@ function logNotice(msg, bad){
 // The plot lives inside the stats panel, under the per-year table, so it is
 // rebuilt by stats() whenever the panel is. Plain SVG: the page has no chart
 // library and none should be added for one line chart.
+// Quartile helpers for the limit plot's box plot. Module scope, not local to
+// limitFitBlock(), because wirePlotMouse() reports the same spread in its hover panel and
+// both must read one definition of it.
+function sortedNums(a){
+  return a.slice().sort(function(p,q){ return p-q; });
+}
+// Linear interpolation between order statistics, which is what makes a 5-year run's Q1/Q3
+// land between real years instead of snapping to whichever year sorts into that rank.
+function quantile(s, f){
+  if (!s.length) return 0;
+  if (s.length === 1) return s[0];
+  var pos = (s.length - 1) * f, lo = Math.floor(pos), hi = Math.ceil(pos);
+  if (lo === hi) return s[lo];
+  return s[lo] + (s[hi] - s[lo]) * (pos - lo);
+}
+// Whiskers run to the most extreme year actually measured, NOT to 1.5*IQR. With only a
+// handful of qualifying years per run there are no statistical outliers to reject, so a
+// 1.5*IQR whisker would clip a real year and understate the spread - which is the one thing
+// the box exists to show. The whole range is the honest box here.
+// Returns null below two values: one year has no distribution to draw.
+function boxStats(pt){
+  var s = sortedNums(pt && pt.cropY ? pt.cropY : []);
+  if (s.length < 2) return null;
+  return {lo:s[0], hi:s[s.length-1], q1:quantile(s,0.25), med:quantile(s,0.5), q3:quantile(s,0.75), n:s.length};
+}
 function limitFitBlock(){
   // A curve measured under different settings answers a different question.
   // Compared against the CURRENT settings, including the Make Square box: the
   // stored signature says which row rule the sweep used, and this decides whether
   // that rule still applies.
   if (limitFit && limitFit.sig !== limitSig()) limitFit = null;
-  if (!limitFit || !limitFit.pts.length) return '';
+  // The heading and the sweep control are always emitted, because the sweep that fills this
+  // plot is started from here; only the parameter list and the plot wait for a measurement.
+  var head = '<div style="margin-top:12px"><u><b>Production vs number of plants shmoo</b></u>'+
+    '<div style="margin-top:5px"><button id="findLimitBtn">Find limit</button>'+
+    '<span class="hint" style="margin-left:6px">run an exhaustive sweep of plant counts to '+
+    'measure the real limit &middot; a silent tone runs while it works, to stop the browser '+
+    'throttling the tab</span></div>';
+  if (!limitFit || !limitFit.pts.length){
+    return head + '<div class="hint" style="margin-top:5px">No sweep yet '+
+      '&mdash; press Find limit to measure this crop'+
+      '</div></div>';
+  }
   var pts = limitFit.pts, W = PLOT_W, H = PLOT_H;
-  var mL = 58, mR = 88, mT = 30, mB = 36;   // mT leaves room for the legend row; mR for the third axis
+  // mT leaves room for the legend rows: at 17px type the four keys need two rows, so mT
+  // is sized from the wrapped row's baseline (39) plus its descent and a small gap.
+  // mR carries, outside the plot frame: the inner
+  // right axis tick labels, the inner right axis TITLE, then the whole turnover axis -
+  // its spine, its ticks, its labels and its title. That is why it is as wide as it is.
+  // mB carries the x tick mark, the 13.5px x tick label and a gap below it; at the old 36px a
+  // label that size would have hung off the bottom of the frame.
+//
+// mR carries THREE separate things stacked horizontally outside the plot frame, and with
+// 13.5px tick labels they no longer fit in the old 132px: the Plant Spot % labels ("100%",
+// ~32px wide from mL+pw+5) ran into their own axis title at mL+pw+34, and the turnover
+// labels then ran into the turnover title. Each band is laid out from the frame edge in
+// order - labels, then title, then the next axis - so the widths are explicit and the
+// spacing follows from the type size rather than from a single magic margin.
+var mL = 58, mT = 50, mB = 60;
+// Band offsets from the plot frame's right edge, sized from the ACTUAL rendered extents at
+// 13.5px rather than guessed: a "100%" label is ~34px wide, and a rotated axis title is
+// ~15px across (its length runs vertically). Order is labels -> title -> next axis.
+//   pct labels  [5 .. 39]      pct title  [48 .. 63]
+//   turn axis   92, labels [101 .. 135]     turn title [144 .. 159]
+var PCT_LBL = 5, PCT_TITLE = 55;
+var TURN_AXIS = 92, TURN_TICK = 96, TURN_LBL = 101, TURN_TITLE = 149;
+var mR = TURN_TITLE + 20;                    // trailing room past the outermost title
   var pw = W - mL - mR, ph = H - mT - mB;
   var lo = pts[0].n, hi = pts[pts.length-1].n;
-  var outMax = 0;
-  for (var i=0; i<pts.length; i++) if (pts[i].crop > outMax) outMax = pts[i].crop;
+var outMax = 0;
+  for (var i=0;i<pts.length;i++){
+    if (pts[i].crop > outMax) outMax = pts[i].crop;
+    // The axis must clear the highest whisker, not just the highest mean. A box plot
+    // drawn to scale but clipped at the top of its own frame would quietly overstate the
+    // spread, which is the one thing a box plot exists to show.
+    if (pts[i].cropY) for (var cy=0; cy<pts[i].cropY.length; cy++)
+      if (pts[i].cropY[cy] > outMax) outMax = pts[i].cropY[cy];
+  }
   // Headroom so the peak and its label do not sit on the top gridline. 20% leaves
   // room for the "max ... at N plants" caption drawn just above the peak.
   outMax = Math.max(1, outMax*1.20);
   // Third axis: turnover shares the horizontal gridlines, but its own ticks step by
   // 1.0 at their exact positions rather than landing on the shared rows.
-  // The top is fixed per crop, not measured - see TURNOVER_MAX.
-  var turnMax = TURNOVER_MAX[CFG.growTicks] || TURNOVER_MAX[70];
+  // One step above the theoretical maximum, so the maximum itself is a line you can see
+  // rather than the frame itself. Derived, not tabulated - see turnoverMax().
+  var turnMax = turnoverMax() + 1;
   var YT = function(v){ return mT + ph - (Math.max(0, v)/turnMax)*ph; };
   var X = function(n){ return mL + (hi>lo ? (n-lo)/(hi-lo) : 0.5)*pw; };
   var YL = function(v){ return mT + ph - (v/outMax)*ph; };
   var YR = function(v){ return mT + ph - (Math.max(0, Math.min(100, v))/100)*ph; };
   function path(key, Y){
     var d = '';
-    for (var i=0; i<pts.length; i++) d += (i?' L':'M') + X(pts[i].n).toFixed(1) + ' ' + Y(pts[i][key]).toFixed(1);
+    for (var i=0; i<pts.length; i++) d += (i?' L':'M') + X(pts[i].n).toFixed(1) + ' ' + Y(pts[i][key]||0).toFixed(1);
     return d;
   }
-  var s = '<div style="margin-top:12px"><u><b>Measured limit</b></u> for '+limitFit.nw+' worker'+
-    (limitFit.nw>1?'s':'')+' ('+limitFit.families+' famil'+(limitFit.families>1?'ies':'y')+
-    ') &mdash; average worker output against plant count'+
-    '<svg viewBox="0 0 '+W+' '+H+'" data-grip="1" style="display:block;width:'+W+'px;max-width:100%;'+
+  // The settings the sweep was run under, listed in the same order and with the same values
+  // the log row records, so a picture can be traced back to a line of log.csv.
+  var sqNow = !!document.getElementById('makeSquare').checked;
+  var parms = [
+    ['Game Version', GAME_VERSION], ['Crop', cropName], ['Families', families],
+    ['Workers', NW], ['Make Square', String(sqNow)], ['YieldMod', CFG_YM],
+    ['Plant Row Count', sqNow ? 'NA' : readNum('rowsSlider', 0, 0, 100000)],
+    ['Refuel Day', CFG.refuelFirstDay], ['Refuel Time', CFG.refuel],
+    ['Re-water Day', CFG.rewaterFirstDay], ['Re-water Time', CFG.rewater],
+    ['Sim Length (yr)', aggregate().nYears] ];
+  var parmStr = parms.map(function(p){
+    return '<b>'+p[0]+'</b> '+p[1];
+  }).join(' &middot; ');
+  var s = head + '<div class="hint" style="margin-top:5px">'+parmStr+'</div>'+
+    '<div style="display:flex;align-items:flex-start;gap:10px;margin-top:6px">'+
+    '<div style="flex:0 0 auto;min-width:0">'+
+    '<svg id="limitPlot" viewBox="0 0 '+W+' '+H+'" data-grip="1" style="display:block;width:'+W+'px;max-width:100%;'+
     'height:'+H+'px;margin:6px 0 0;background:#fff;border:1px solid #dcdcd8">';
   // The legend lives INSIDE the plot: a row of swatches above the grid, wrapping
-  // to a second row rather than spilling out of the frame.
-  var LEG = [[cropColor,'Output, '+cropName+'/yr (left)'],
-             ['#e67e22','Peak Plant Spot %'], ['#c0392b','Clogging %'], ['#00838f','Turnover /spot/yr'],
-             ['#999','this run'], ['#1a7f37', Math.round(KNEE_FRAC*100)+'% of peak']];
-  var lx = mL, ly = 11;
+  // to a second row rather than spilling out of the frame. Line samples are drawn as
+  // lines rather than squares, because the series differ in stroke style as well as
+  // colour and a flat swatch cannot say that.
+  // Only the four plotted series are keyed: the shaded regions and the Absolute Max line
+  // are named by the labels on the plot itself, so a swatch for them only repeated it.
+  var LEG = [[cropColor,'Output, '+cropName+'/yr (left): box = spread over years, dot = mean'],
+             ['line','Peak Plant Spot % (solid)'], ['line','Winter Plant Spot % 01 Dec (dashed)'],
+             ['line','Avg Plant Spot Turnover /yr', '#00838f']];
+  // Legend type is twice the size it used to be (8.5 -> 17), and the samples scale with it.
+  var LEG_FS = 17, LEG_ROW = 22;
+  var lx = mL, ly = 17;
   for (var li=0; li<LEG.length; li++){
-    var lw = LEG[li][1].length*4.5 + 20;
-    if (lx + lw > mL + pw){ lx = mL; ly += 11; }
-    s += '<rect x="'+lx.toFixed(1)+'" y="'+(ly-7)+'" width="9" height="9" fill="'+LEG[li][0]+'"/>'+
-         '<text x="'+(lx+12).toFixed(1)+'" y="'+ly+'" font-size="8.5" fill="#555">'+LEG[li][1]+'</text>';
+    var kind = LEG[li][0], lab = LEG[li][1], lw = lab.length*9 + 44;
+    if (lx + lw > mL + pw){ lx = mL; ly += LEG_ROW; }
+    // A line sample is drawn in the colour of the series it keys, so the turnover key is
+    // teal like the turnover curve; only the two spot-utilisation curves are near-black.
+    var lcol = LEG[li][2] || ((kind === 'line') ? '#1a1a1a' : kind);
+    if (kind === 'line'){
+      // Two samples: solid for the percentage series, dashed for Winter, so the swatch
+      // carries the same distinction the line itself does.
+      var dashed = (lab.indexOf('dashed') >= 0);
+      s += '<line x1="'+lx.toFixed(1)+'" y1="'+(ly-6)+'" x2="'+(lx+32).toFixed(1)+'" y2="'+(ly-6)+
+           '" stroke="'+lcol+'" stroke-width="2"'+(dashed?' stroke-dasharray="7 5"':'')+'/>';
+    } else {
+      s += '<rect x="'+lx.toFixed(1)+'" y="'+(ly-13)+'" width="18" height="18" fill="'+kind+'"/>';
+    }
+    s += '<text x="'+(lx+38).toFixed(1)+'" y="'+ly+'" font-size="'+LEG_FS+'" fill="#555">'+lab+'</text>';
     lx += lw;
   }
+  // Shaded regions. Deliberately the faintest thing on the chart: these are regions, not
+  // selections, so they go down first and everything else - grid, axes, series, markers -
+  // draws over them.
+  //   bands   Peak Land Efficiency (PLE) green, Good Land & Labor Efficiency (GLLE) yellow - the two
+  //           spans where output is still climbing
+  // There is no band from zero to PLE any more: the PLE band describes the same stretch of
+  // the curve and does it from the data rather than from a turnover threshold, so painting
+  // both would only put two colours on one region. There is no separate PLE marker either:
+  // PLE is a REGION now, bounded by the PLE Min and PLE Max reference lines.
+  // The trough between the two regions is left unpainted on purpose: painting it would
+  // merge them into one band, which is the reading this change exists to remove.
+  function bandRect(aN, bN, fill){
+    if (aN == null || bN == null) return '';
+    var x1 = Math.max(mL, Math.min(X(aN), mL+pw));
+    var x2 = Math.max(mL, Math.min(X(bN), mL+pw));
+    if (x2 < x1){ var sw = x1; x1 = x2; x2 = sw; }
+    if (x2 - x1 <= 0.5) return '';
+    return '<rect x="'+x1.toFixed(1)+'" y="'+mT+'" width="'+(x2-x1).toFixed(1)+
+           '" height="'+ph+'" fill="'+fill+'"/>';
+  }
+  var RAMP = limitFit.ramps;
+  if (RAMP){
+    s += bandRect(RAMP.ramp1.loN, RAMP.ramp1.hiN, '#e3f1e5');
+    s += bandRect(RAMP.ramp2.loN, RAMP.ramp2.hiN, '#fdf6d8');
+  }
+  // Watermark: a signature laid down with the bands, under the grid, the curve and every
+  // label. Half the type size, horizontal, and parked at the right-hand end just below the
+  // 25% gridline, where the curve has already flattened and the space is empty. 6% black
+  // is the ceiling here - any darker and it competes with the 1px grid.
+  (function(){
+    var wx = mL + pw - 8, wy = mT + ph*0.75 + 25;
+    s += '<text x="'+wx.toFixed(1)+'" y="'+wy.toFixed(1)+'" font-size="23" font-weight="bold"'+
+         ' fill="#000" fill-opacity="0.06" text-anchor="end" letter-spacing="1"'+
+         ' pointer-events="none">ManorLordsTheoryCraft</text>';
+  })();
   for (var g=0; g<=4; g++){                       // horizontal grid + all three axes
     var yy = mT + ph - g*ph/4;
     s += '<line x1="'+mL+'" y1="'+yy.toFixed(1)+'" x2="'+(mL+pw)+'" y2="'+yy.toFixed(1)+
          '" stroke="#e6e6e0" stroke-width="1"/>'+
-         '<text x="'+(mL-5)+'" y="'+(yy+3.5).toFixed(1)+'" font-size="9" fill="#555" text-anchor="end">'+
+         '<text x="'+(mL-5)+'" y="'+(yy+4.5).toFixed(1)+'" font-size="13.5" fill="#555" text-anchor="end">'+
          Math.round(outMax*g/4)+'</text>'+
-         '<text x="'+(mL+pw+5)+'" y="'+(yy+3.5).toFixed(1)+'" font-size="9" fill="#555">'+(g*25)+'%</text>';
+         '<text x="'+(mL+pw+PCT_LBL)+'" y="'+(yy+4.5).toFixed(1)+'" font-size="13.5" fill="#555">'+(g*25)+'%</text>';
   }
-  s += '<line x1="'+mL+'" y1="'+mT+'" x2="'+mL+'" y2="'+(mT+ph)+'" stroke="#8f8f88"/>'+
+  // Each Y axis now has its own spine: crop output left, plant-spot % inner right in
+  // black, turnover outer right in blue. An axis with tick labels but no line reads as
+  // an extension of the plot frame rather than as a scale of its own.
+  s += '<line x1="'+(mL+pw)+'" y1="'+mT+'" x2="'+(mL+pw)+'" y2="'+(mT+ph)+'" stroke="#1a1a1a"/>'+
+       '<line x1="'+mL+'" y1="'+mT+'" x2="'+mL+'" y2="'+(mT+ph)+'" stroke="#8f8f88"/>'+
        '<line x1="'+mL+'" y1="'+(mT+ph)+'" x2="'+(mL+pw)+'" y2="'+(mT+ph)+'" stroke="#8f8f88"/>'+
-       '<line x1="'+(mL+pw+40)+'" y1="'+mT+'" x2="'+(mL+pw+40)+'" y2="'+(mT+ph)+'" stroke="#00838f" opacity="0.6"/>';
+       '<line x1="'+(mL+pw+TURN_AXIS)+'" y1="'+mT+'" x2="'+(mL+pw+TURN_AXIS)+'" y2="'+(mT+ph)+
+       '" stroke="#00838f" opacity="0.6"/>';
   for (var tv=0; tv<=turnMax+1e-9; tv+=1.0){
-    s += '<line x1="'+(mL+pw+40)+'" y1="'+YT(tv).toFixed(1)+'" x2="'+(mL+pw+44)+'" y2="'+YT(tv).toFixed(1)+
-         '" stroke="#00838f" opacity="0.6"/>'+
-         '<text x="'+(mL+pw+49)+'" y="'+(YT(tv)+3.5).toFixed(1)+'" font-size="9" fill="#00838f">'+tv.toFixed(1)+'</text>';
+    s += '<line x1="'+(mL+pw+TURN_AXIS)+'" y1="'+YT(tv).toFixed(1)+'" x2="'+(mL+pw+TURN_TICK)+
+         '" y2="'+YT(tv).toFixed(1)+'" stroke="#00838f" opacity="0.6"/>'+
+         '<text x="'+(mL+pw+TURN_LBL)+'" y="'+(YT(tv)+4.5).toFixed(1)+'" font-size="13.5" fill="#00838f">'+
+         tv.toFixed(1)+'</text>';
   }
   var xt = lo, xtGuard = 0;                        // x labels, thinned to fit
+  var majorX = [];                                 // where the major labels already are
   while (xt < hi && xtGuard++ < 40){
     s += xTick(X(xt), xt);
+    majorX.push(X(xt));
     xt += Math.max(LIMIT_STEP, Math.ceil((hi-lo)/8/LIMIT_STEP)*LIMIT_STEP);
   }
   s += xTick(X(hi), hi);                         // the top of the range always labelled
+  majorX.push(X(hi));
   function xTick(x, v){
-    return '<line x1="'+x.toFixed(1)+'" y1="'+(mT+ph)+'" x2="'+x.toFixed(1)+'" y2="'+(mT+ph+4)+
-           '" stroke="#8f8f88"/><text x="'+x.toFixed(1)+'" y="'+(mT+ph+15)+
-           '" font-size="9" fill="#555" text-anchor="middle">'+v+'</text>';
+    // Tick length and label offset both grow with the type, so a 13.5px label still clears the
+  // tick and still sits below the captions rather than through them.
+  return '<line x1="'+x.toFixed(1)+'" y1="'+(mT+ph)+'" x2="'+x.toFixed(1)+'" y2="'+(mT+ph+6)+
+           '" stroke="#8f8f88"/><text x="'+x.toFixed(1)+'" y="'+(mT+ph+22)+
+           '" font-size="13.5" fill="#555" text-anchor="middle">'+v+'</text>';
   }
+  // The PLE and GLLE bounds are minor ticks on the same axis rather than rotated captions
+  // standing inside the plot: a plant count is read off the axis anyway, and captions in
+  // the plot had to share the strip with the curve. The major interval is untouched - these
+  // are shorter marks at 10.5px, in the colour of the region they close off. A bound that
+  // lands on a labelled major tick is already marked, so nothing is added for it.
+  var minorPlaced = [], minorSeen = {};
+  if (RAMP){
+    s += minorTick(RAMP.ramp1.loN, '#1a7f37');
+    s += minorTick(RAMP.ramp1.hiN, '#1a7f37');
+    s += minorTick(RAMP.ramp2.loN, '#b8860b');
+    s += minorTick(RAMP.ramp2.hiN, '#b8860b');
+  }
+  // Absolute Max is marked the same way, in the crop colour of its own vertical line.
+  s += minorTick(limitFit.peakN, cropColor);
+  function minorTick(nv, col){
+    if (minorSeen[nv]) return '';                  // the two regions can share an edge
+    minorSeen[nv] = 1;
+    var mx = X(nv), q;
+    for (q=0; q<majorX.length; q++) if (Math.abs(majorX[q]-mx) < 0.5) return '';
+    var wm = String(nv).length*6.2, half = wm/2;   // 10.5px digits run ~6.2px each
+    // Nudge the number off its own tick when it would sit on a major label or on the other
+    // bound - cabbages has PLE Max 120 ten plants from GLLE Min 130, which is 8px.
+    var cand = [mx, mx-8, mx+8, mx-16, mx+16], cx = null;
+    for (var i=0; i<cand.length && cx===null; i++){
+      var c = cand[i], hit = false;
+      for (q=0; q<majorX.length; q++) if (Math.abs(majorX[q]-c) < half + 12 + 3) hit = true;
+      for (q=0; q<minorPlaced.length; q++) if (Math.abs(minorPlaced[q]-c) < wm + 3) hit = true;
+      if (!hit) cx = c;
+    }
+    // A bound 10 plants from a 110-plant major tick (carrots GLLE Max 490 against the 500
+    // label) has no room on that row at all, so it drops to a second row rather than being
+    // left sitting on top of the major. mB leaves that row clear of the axis title.
+    var rowY = mT+ph+22;
+    if (cx === null){ cx = mx; rowY = mT+ph+36; }
+    minorPlaced.push(cx);
+    return '<line x1="'+mx.toFixed(1)+'" y1="'+(mT+ph)+'" x2="'+mx.toFixed(1)+'" y2="'+(mT+ph+4)+
+           '" stroke="'+col+'" stroke-width="1.6"/>'+
+           '<text x="'+cx.toFixed(1)+'" y="'+rowY+'" font-size="10.5" fill="'+col+
+           '" text-anchor="middle">'+nv+'</text>';
+  }
+  // All three Y axes carry a title. An axis with no name is an axis the reader has to
+  // guess at from the legend swatch, which is exactly the wrong place to have to look.
+  // The inner right axis is Peak Plant Spot %; it used to be shared with Clogging, and
+  // naming it is only unambiguous now that Clogging is off the plot.
+  var ayMid = (mT + ph/2).toFixed(1);
   s += '<text x="'+(mL+pw/2)+'" y="'+(H-4)+'" font-size="15" fill="#333" text-anchor="middle">Number of plants</text>'+
-       '<text x="14" y="'+(mT+ph/2)+'" font-size="15" fill="#333" text-anchor="middle" transform="rotate(-90 14 '+
-       (mT+ph/2)+')">'+cropName+'/yr</text>';
+       '<text x="14" y="'+ayMid+'" font-size="15" fill="#333" text-anchor="middle" transform="rotate(-90 14 '+ayMid+
+       ')">'+cropName+'/yr</text>'+
+       '<text x="'+(mL+pw+PCT_TITLE)+'" y="'+ayMid+'" font-size="13" fill="#555" text-anchor="middle" transform="rotate(-90 '+
+       (mL+pw+PCT_TITLE)+' '+ayMid+')">Peak / Winter Plant Spot %</text>'+
+       '<text x="'+(mL+pw+TURN_TITLE)+'" y="'+ayMid+'" font-size="13" fill="#00838f" text-anchor="middle" transform="rotate(-90 '+
+       (mL+pw+TURN_TITLE)+' '+ayMid+')">Avg Plant Spot Turnover /yr</text>';
   // where this run sits, and where the curve stops paying
   // The measured maximum, as a level and as a place, so the 95% marker can be
   // read against it: the horizontal line is the ceiling, the vertical one is
   // where it was reached. Both dotted, in the crop colour, behind the curve.
-  var pkY = YL(limitFit.peakCrop);
-  var maxText = 'Absolute Max';
-  var kneeText = limitFit.kneeN != null ? 'Recommended Max' : '';
-  s += '<line x1="'+mL+'" y1="'+pkY.toFixed(1)+'" x2="'+(mL+pw)+'" y2="'+pkY.toFixed(1)+
-       '" stroke="'+cropColor+'" stroke-width="1" stroke-dasharray="2 4" opacity="0.75"/>'+
-       '<line x1="'+X(limitFit.peakN).toFixed(1)+'" y1="'+mT+'" x2="'+X(limitFit.peakN).toFixed(1)+
+  // Absolute Max is drawn as a VERTICAL line only; there is no horizontal rule at the peak
+  // crop level any more. pkY is no longer needed for one, so it is not computed.
+  // Its count is labelled on the x axis with the region bounds (minorTick, crop colour), so
+  // no caption is emitted here.
+  // The knee is still measured and still quoted in the panel and the CSV, but its plot
+  // label is gone: "Recommended Max" was the old name for it, and that name is not reused -
+  // the named boundaries on the plot are now the four region edges (PLE Min/Max, GLLE
+  // Min/Max) and Absolute Max.
+  // Only the VERTICAL line is drawn. The old horizontal rule across the plot at peak output
+  // was redundant: the vertical line already marks the same count, and the horizontal one
+  // crossed the whole plot area cutting through every series and both bands.
+  s += '<line x1="'+X(limitFit.peakN).toFixed(1)+'" y1="'+mT+'" x2="'+X(limitFit.peakN).toFixed(1)+
        '" y2="'+(mT+ph)+'" stroke="'+cropColor+'" stroke-width="1" stroke-dasharray="2 4" opacity="0.75"/>';
-  if (limitFit.kneeN != null)
-    s += '<line x1="'+X(limitFit.kneeN).toFixed(1)+'" y1="'+mT+'" x2="'+X(limitFit.kneeN).toFixed(1)+
-         '" y2="'+(mT+ph)+'" stroke="#1a7f37" stroke-width="1.5" stroke-dasharray="4 3"/>';
-  if (limitFit.recMinN != null)
-    s += '<line x1="'+X(limitFit.recMinN).toFixed(1)+'" y1="'+mT+'" x2="'+X(limitFit.recMinN).toFixed(1)+
-         '" y2="'+(mT+ph)+'" stroke="#00838f" stroke-width="1.5" stroke-dasharray="1 3"/>';
-  // Both captions sit along the bottom of the plot, above the x-axis labels. If the two
-  // would overlap, the max caption steps up one line so the knee caption keeps the
-  // bottom row.
-  var baseLabelY = mT+ph-8;
-  var maxLabelX = mL+pw-3;
-  var maxLabelY = baseLabelY;
-  var kneeLabelY = baseLabelY;
-  var maxW = maxText.length*4.6 + 6;
-  var kneeX = -1e9, kneeW = 0;
-  if (limitFit.kneeN != null){
-    kneeX = X(limitFit.kneeN)+3;
-    kneeW = kneeText.length*4.6 + 6;
-    if (kneeX < maxLabelX && (maxLabelX-maxW) < (kneeX+kneeW)) maxLabelY = baseLabelY-12;
-    s += '<text x="'+kneeX.toFixed(1)+'" y="'+kneeLabelY.toFixed(1)+'" font-size="9" font-weight="bold" fill="#1a7f37">'+
-         kneeText+'</text>';
+  // Four reference lines, one at each end of each region: PLE Min, PLE Max, GLLE Min,
+  // GLLE Max. Drawn in the colour of the region they close off - green for PLE, amber for
+  // GLLE - so the line, the band edge and the caption beneath all read as one thing. Only
+  // the LINE carries the colour; the caption stays black, because the captions sit on a
+  // band that is already tinted and coloured text on a tint is harder to read, not easier.
+  // Drawn behind the curve, like the Abs Max lines, so nothing is obscured by them.
+  function edgeLine(nv, col, w, dash){
+    var ex = X(nv).toFixed(1);
+    return '<line x1="'+ex+'" y1="'+mT+'" x2="'+ex+'" y2="'+(mT+ph)+'" stroke="'+col+
+           '" stroke-width="'+w+'"'+(dash ? ' stroke-dasharray="'+dash+'"' : '')+'/>';
   }
-  var recLabelY = baseLabelY;
-  if (limitFit.recMinN != null){
-    var recText = 'Recommended Min';
-    var recX = X(limitFit.recMinN)+3;
-    var recW = recText.length*4.6 + 6;
-    var bump = 0;
-    while (bump++ < 3 && (
-      (limitFit.kneeN != null && Math.abs(recLabelY-kneeLabelY) < 10 && recX < kneeX+kneeW && kneeX < recX+recW) ||
-      (Math.abs(recLabelY-maxLabelY) < 10 && recX < maxLabelX && (maxLabelX-maxW) < recX+recW)))
-      recLabelY -= 12;
-    s += '<text x="'+recX.toFixed(1)+'" y="'+recLabelY.toFixed(1)+'" font-size="9" font-weight="bold" fill="#00838f">'+
-         recText+'</text>';
+  // All four are named reference lines now, so they share one style. When the regions meet
+  // (beetroots) the shared count is drawn once - PLE Max and GLLE Min are the same line.
+  if (RAMP){
+    s += edgeLine(RAMP.ramp1.loN, '#7fbf7f', 1.3, '2 4');
+    s += edgeLine(RAMP.ramp1.hiN, '#1a7f37', 1.3, '2 4');
+    if (RAMP.ramp2.loN !== RAMP.ramp1.hiN) s += edgeLine(RAMP.ramp2.loN, '#b8860b', 1.3, '2 4');
+    s += edgeLine(RAMP.ramp2.hiN, '#b8860b', 1.3, '2 4');
   }
-  s += '<text x="'+maxLabelX.toFixed(1)+'" y="'+maxLabelY.toFixed(1)+'" font-size="9" font-weight="bold" fill="'+cropColor+
-       '" text-anchor="end">'+maxText+'</text>';
+  // There are no rotated captions inside the plot any more: every named mark - the four
+  // region bounds and Absolute Max - is a minor tick on the x axis (see minorTick above).
+  // Three-line labels, one per regime and one at the absolute maximum: the name, the label
+  // of the measure, then the figure. The figure is the same measure the log records -
+  // output per 100 plants per year divided by the worker count - so the picture and the CSV
+  // cannot disagree.
+  //   PLE / GLLE: the gradient of that span, i.e. what one more plant still buys there,
+  //              centred on the span it describes.
+  //   Abs Max:   the average at the top of the curve, since the gradient there is ~0,
+  //              right-justified so the block ends against its own reference line.
+  // A white halo keeps them legible where the curve passes through.
+  var REGION_FS = 15, REGION_LH = 18;
+  var REGION_UNITS = 'Output /worker /100 plants';
+  var REGION_STEP = 2*REGION_LH + REGION_FS + 6;
+  function perWorker(g){ return NW ? (g*100/NW).toFixed(2) : ''; }
+  function regionText(title, val, xa, yBot, col, anchor){
+    var xf = xa.toFixed(1), y0 = yBot - 2*REGION_LH;
+    return '<text x="'+xf+'" y="'+y0.toFixed(1)+
+           '" font-size="'+REGION_FS+'" fill="'+col+'" text-anchor="'+anchor+'"'+
+           ' paint-order="stroke" stroke="#fff" stroke-width="2.5" stroke-linejoin="round">'+
+           '<tspan x="'+xf+'">'+title+'</tspan>'+
+           '<tspan x="'+xf+'" dy="'+REGION_LH+'">'+REGION_UNITS+'</tspan>'+
+           '<tspan x="'+xf+'" dy="'+REGION_LH+'">'+val+'</tspan></text>';
+  }
+  var regimeLabels = [];
+  if (RAMP){
+    regimeLabels.push({ t:'Peak Land Efficiency', v:perWorker(RAMP.ramp1.gain),
+                        cx:(X(RAMP.ramp1.loN) + X(RAMP.ramp1.hiN))/2,
+                        col:'#2c6b39', anchor:'middle' });
+    regimeLabels.push({ t:'Good Land &amp; Labor Efficiency', v:perWorker(RAMP.ramp2.gain),
+                        cx:(X(RAMP.ramp2.loN) + X(RAMP.ramp2.hiN))/2,
+                        col:'#8a6d00', anchor:'middle' });
+  }
+  regimeLabels.push({ t:'Absolute Maximum',
+                      v:(limitFit.peakN > 0 && NW) ? (limitFit.peakCrop/limitFit.peakN*100/NW).toFixed(2) : '',
+                      cx:X(limitFit.peakN), col:cropColor, anchor:'end' });
+  // Rightmost first, so each block keeps the bottom edge until something is in its way.
+  // A centred block is clamped by half its width; the right-justified one by its full width,
+  // since it grows leftward from the reference line.
+  var yBot = mT + ph - 6, placedBlocks = [];
+  for (var li = regimeLabels.length-1; li >= 0; li--){
+    var LB = regimeLabels[li];
+    var bw = Math.max(LB.t.length, REGION_UNITS.length, LB.v.length)*0.5*REGION_FS;
+    var bhalf = bw/2, lx, bmid;
+    if (bw > pw){
+      lx = LB.anchor === 'end' ? mL + pw : mL + pw/2;
+      bmid = mL + pw/2;
+    } else if (LB.anchor === 'end'){
+      lx = Math.min(Math.max(LB.cx - 5, mL + bw), mL + pw);
+      bmid = lx - bhalf;
+    } else {
+      lx = Math.min(Math.max(LB.cx, mL + bhalf), mL + pw - bhalf);
+      bmid = lx;
+    }
+    var ly = yBot, guard = 0;
+    while (guard++ < regimeLabels.length + 1){
+      var hit = false;
+      for (var pb=0; pb<placedBlocks.length; pb++){
+        var o = placedBlocks[pb];
+        if (Math.abs(o.x - bmid) < (o.w + bw)/2 + 6 &&
+            Math.abs(o.y - ly) < REGION_STEP){ hit = true; break; }
+      }
+      if (!hit) break;
+      ly -= REGION_STEP;
+    }
+    placedBlocks.push({x:bmid, y:ly, w:bw});
+    s += regionText(LB.t, LB.v, lx, ly, LB.col, LB.anchor);
+  }
   // No PPSU threshold markings are drawn here. The limit belongs to the sweep, not the
   // picture: the caption and debug line state the count, while the plot shows only the
-  // measured Output, Peak Plant Spot % and Clogging series.
-  s += '<line x1="'+X(N).toFixed(1)+'" y1="'+mT+'" x2="'+X(N).toFixed(1)+'" y2="'+(mT+ph)+
-       '" stroke="#999" stroke-width="1" stroke-dasharray="2 3"/>';
+  // measured Output, Peak Plant Spot % and Turnover series.
+  // The reference line used to be a static mark at the run's own plant count. It is now
+  // driven by the mouse, so it is emitted hidden and moved by wirePlotMouse(); the static
+  // mark is gone rather than left underneath.
+  s += '<line id="refLine" x1="'+X(N).toFixed(1)+'" y1="'+mT+'" x2="'+X(N).toFixed(1)+
+       '" y2="'+(mT+ph)+'" stroke="#333" stroke-width="1.3" stroke-dasharray="3 3" visibility="hidden"/>';
   // Output and turnover are drawn as markers only, NOT as joined lines. The scan
   // measures a coarse grid in most of the range, so a connecting path would draw a
   // straight slope across hundreds of plants that were never measured and read as if
-  // they were. The gaps are the honest part. Peak Plant Spot % and Clogging % stay
-  // joined: they are there for shape, and the dense region around the peak is
-  // contiguous.
-  s += '<path d="'+path('ppsuPct', YR)+'" fill="none" stroke="#e67e22" stroke-width="1.3"/>'+
-       '<path d="'+path('clog', YR)+'" fill="none" stroke="#c0392b" stroke-width="1.3"/>';
+  // they were. The gaps are the honest part. Output carries a box plot per count; Peak
+  // Plant Spot % stays joined: it is there for shape, and the dense region around the
+  // peak is contiguous.
+  // Clogging is deliberately not plotted. It shares the 0-100% axis with Peak Plant
+  // Spot %, sits an order of magnitude lower across the whole range, and flattens on
+  // the same curve - it reads as a second PPSU line and says nothing the per-year
+  // table does not already carry in numbers.
+  s += '<path d="'+path('ppsuPct', YR)+'" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>'+
+       '<path d="'+path('wpsuPct', YR)+'" fill="none" stroke="#1a1a1a" stroke-width="1.3" stroke-dasharray="4 3"/>';
+  // Output is drawn as a box plot of the per qualifying year's crop figure, with the
+  // mean retained as a line across the box and the peak marked as before. The spread is
+  // the point: a run whose years agree tightly and a run whose years swing wildly have
+  // the same mean, and only the box tells them apart. Years with too few values to have a
+  // distribution (one qualifying year) fall back to the plain marker.
+  //
+  // Boxes are drawn as markers rather than a joined path, for the same reason the rest of
+  // the plot avoids connecting lines: the scan measures a coarse grid across much of the
+  // range, and a line would imply a straight slope through counts never measured.
+  // Widths are capped and shrink where points crowd, so a dense region reads as a band of
+  // boxes rather than a solid black block.
+  var BW = 15, MINB = 2.2;
+  var spacing = (pts.length > 1) ? Math.abs(X(pts[1].n) - X(pts[0].n)) : Infinity;
+  var boxW = Math.max(MINB, Math.min(BW, spacing*0.8));
   for (var d2=0; d2<pts.length; d2++){
     var pt = pts[d2];
     var isPeak = pt.n === limitFit.peakN;
-    var isKnee = limitFit.kneeN != null && pt.n === limitFit.kneeN;
-    var flag = isPeak ? ' <b>PEAK</b>' : (isKnee ? ' <b>'+Math.round(KNEE_FRAC*100)+'% OF PEAK</b>' : '');
-    // All output markers use the same circle. The peak and knee are named in the hover
-    // text and by the vertical reference lines, not by a larger marker.
-    s += '<circle cx="'+X(pt.n).toFixed(1)+'" cy="'+YL(pt.crop).toFixed(1)+'" r="2.6"'+
-         ' fill="'+cropColor+'">'+
-         '<title>'+pt.n+' plants\n'+pt.crop+' '+cropName+'/yr'+flag+
-         '\n'+pt.out.toFixed(0)+' harvests/yr</title></circle>';
+    var flag = isPeak ? ' <b>PEAK</b>' : '';
+    var st = boxStats(pt);
+    var cx = X(pt.n);
+    var title;
+    if (st){
+      title = pt.n+' plants\n'+pt.crop+' '+cropName+'/yr (mean of '+st.n+' years)'+flag+
+              '\nrange '+st.lo+'-'+st.hi+
+              '\n'+pt.out.toFixed(0)+' harvests/yr';
+    } else {
+      title = pt.n+' plants\n'+pt.crop+' '+cropName+'/yr'+flag+
+              '\n'+pt.out.toFixed(0)+' harvests/yr';
+    }
+    if (st){
+      var hx = boxW/2;
+      // Whisker line, then box, then the median and mean rules on top of it.
+      s += '<g>'+
+           '<line x1="'+cx.toFixed(1)+'" y1="'+YL(st.lo).toFixed(1)+'" x2="'+cx.toFixed(1)+
+           '" y2="'+YL(st.hi).toFixed(1)+'" stroke="'+cropColor+'" stroke-width="1"/>'+
+           '<line x1="'+(cx-hx).toFixed(1)+'" y1="'+YL(st.hi).toFixed(1)+'" x2="'+(cx+hx).toFixed(1)+
+           '" y2="'+YL(st.hi).toFixed(1)+'" stroke="'+cropColor+'" stroke-width="1"/>'+
+           '<line x1="'+(cx-hx).toFixed(1)+'" y1="'+YL(st.lo).toFixed(1)+'" x2="'+(cx+hx).toFixed(1)+
+           '" y2="'+YL(st.lo).toFixed(1)+'" stroke="'+cropColor+'" stroke-width="1"/>'+
+           '<rect x="'+(cx-hx).toFixed(1)+'" y="'+YL(st.q3).toFixed(1)+'" width="'+boxW.toFixed(1)+
+           '" height="'+Math.max(1, YL(st.q1)-YL(st.q3)).toFixed(1)+'" fill="'+cropColor+
+           '" fill-opacity="0.32" stroke="'+cropColor+'" stroke-width="1"/>'+
+           '<line x1="'+(cx-hx).toFixed(1)+'" y1="'+YL(st.med).toFixed(1)+'" x2="'+(cx+hx).toFixed(1)+
+           '" y2="'+YL(st.med).toFixed(1)+'" stroke="'+cropColor+'" stroke-width="1.6"/>'+
+           '<title>'+title+'</title></g>';
+    } else {
+      s += '<circle cx="'+cx.toFixed(1)+'" cy="'+YL(pt.crop).toFixed(1)+'" r="2.6"'+
+           ' fill="'+cropColor+'"><title>'+title+'</title></circle>';
+    }
+    // The mean is a dot on its own layer so it stays readable once the boxes are drawn.
+    if (st)
+      s += '<circle cx="'+cx.toFixed(1)+'" cy="'+YL(pt.crop).toFixed(1)+'" r="1.9" fill="'+cropColor+'"/>';
   }
-  for (var d3=0; d3<pts.length; d3++){
-    var tq = pts[d3];
-    s += '<circle cx="'+X(tq.n).toFixed(1)+'" cy="'+YT(tq.turn||0).toFixed(1)+'" r="2.6"'+
-         ' fill="#00838f">'+
-         '<title>'+tq.n+' plants\nTurnover '+((tq.turn||0).toFixed(2))+' harvests/spot/yr</title></circle>';
-  }
+  // Turnover is drawn as a joined line only, no marker dots. It is a single smooth quantity
+  // read off the same grid, so the line carries the whole shape and the dots only added
+  // visual noise on top of it. The line is drawn after the Output boxes so it stays legible
+  // where the two series cross.
+  s += '<path d="'+path('turn', YT)+'" fill="none" stroke="#00838f" stroke-width="1.5" stroke-linejoin="round">'+
+       '<title>'+cropName+' turnover per spot per year</title></path>';
   // Resize grip, parked in the corner outside the plot frame so it never covers data.
   s += '<g data-grip="1" style="cursor:nwse-resize">'+
        '<rect x="'+(W-17)+'" y="'+(H-17)+'" width="17" height="17" fill="#fff" fill-opacity="0.9" stroke="#c9c9c4"/>'+
        '<path d="M'+(W-5.5)+' '+(H-5.5)+'l-7 7M'+(W-9.5)+' '+(H-5.5)+'l-5 5M'+(W-5.5)+' '+(H-9.5)+'l-3 3" stroke="#8a8a84" stroke-width="1.2" fill="none"/>'+
        '<title>Drag to resize the plot</title></g>'+
-       '</svg>'+
-       '<div style="font-size:12px;color:#555;margin-top:3px"><ul style="margin:4px 0;padding-left:18px">'+
-       '<li><b>Absolute Max</b> measured output <b style="color:'+cropColor+'">'+
-       limitFit.peakCrop+' '+cropName+'/yr</b> ('+limitFit.peakOut.toFixed(0)+
-       ' harvests/yr) at <b>'+limitFit.peakN+'</b> plants. Labor limit. Increasing the number of plant spots (larger extension) no longer increases output at all.</li>'+
-       '<li><b>Recommended Max</b> '+
-       (limitFit.kneeN==null?'<b>n/a</b>':'<b style="color:'+cropColor+'">'+limitFit.kneeCrop+' '+cropName+'/yr</b>')+
-       (limitFit.kneeN==null ? '' : ' ('+limitFit.kneeOut.toFixed(0)+' harvests/yr) at <b>'+
-        limitFit.kneeN+'</b> plants has <b>'+Math.round(KNEE_FRAC*100)+
-        '%</b> of the output of Absolute Max while only having <b>'+
-        Math.round(100*limitFit.kneeN/limitFit.peakN)+'%</b> the number of plants')+'</li>'+
-       (limitFit.recMinN==null ? '' :
-        '<li><b>Recommended Minimum</b> is <b>'+(limitFit.peakCrop>0?Math.round(100*limitFit.recMinCrop/limitFit.peakCrop):0)+
-        '% of Absolute Max</b> <b style="color:'+cropColor+'">'+limitFit.recMinCrop+' '+cropName+'/yr</b> ('+
-        limitFit.recMinOut.toFixed(0)+' harvests/yr) at <b>'+limitFit.recMinN+'</b> plants. For those who don\'t like the look of large veggie extensions. Above this number of plants, output starts to become sublinear (increasing number of plants by 10% start to return less than 10% vegetables) so instead of for example doubling the number of plants here, you might opt to instead build an additional identical plot and overall have more vegetables, albeit at the cost of separate family. Note that worker idle time is already low, so this isn\'t by any means a good use of land or labor, but building smaller than this now also starts to be a waste of seed money.</li>')+'</ul>'+
-       (limitFit.bracketed
-        ? 'Simulation runs stopped at '+limitFit.debug.capN+
-           ' plants with confirmation of no further increase in output over the identified Absolute Max while Peak Plant Spot Utilization fell from 100% to 85%.'
-        : (limitFit.debug.capAtCeiling
+       '</svg></div>'+
+       // The readout is a column beside the plot, not a tip that chases the cursor. It
+       // stays put, so the eye can stay on one spot while the numbers change, and it
+       // never covers the curve it is describing.
+       '<div id="refTip" style="flex:0 0 205px;border:1px solid #b9b9b2;border-radius:3px;'+
+       'background:#fbfbf9;padding:7px 9px;font:11.5px/1.55 Consolas,monospace;'+
+       'color:#333;white-space:nowrap;min-height:74px"></div></div>'+
+        // The three limits, in one voice: what each size is, what it produces, and the
+        // production factor that goes with it - the same measure the axis labels quote.
+        '<div style="font-size:12px;color:#555;margin-top:3px;max-width:'+W+'px;white-space:normal">'+
+        '<ul style="margin:4px 0;padding-left:18px">'+
+        (function(){
+          var rp = limitFit.ramps, nw = limitFit.nw || 1, fam = limitFit.families;
+          var perF = function(g){ return (g*100/nw).toFixed(2); };
+          var out = '<li><b>Absolute Max Size '+limitFit.peakN+' plants</b>, output '+
+            '<b style="color:'+cropColor+'">'+limitFit.peakCrop+' '+cropName+'/yr</b> or, '+
+            perF(limitFit.peakCrop/Math.max(1,limitFit.peakN))+' '+cropName+
+            ' per yr per 100 plants per worker. This is the absolute highest number of plants required '+
+            'to extract maximum production value with '+nw+' worker'+(nw>1?'s':'')+
+            ', i.e. maximum Labor Efficiency. Having more plant spots no longer leads to more '+
+            'vegetables. Peak Plant Spot Utilization (PPSU) is at risk of or may already have '+
+            'fallen below 100% (parts of the backyard not touched by a worker all year). '+
+            'Winter Plant Spot Utilization (WPSU) is likely to be under 50% (more than 50% '+
+            'of the backyard doing nothing each winter). Note from the production factor that this '+
+            'number of plants is far from land efficient (compare with PLE and GLLE).</li>';
+          if (rp){
+            out += '<li><b>Max Size @ Peak Land Efficiency (PLE) '+rp.ramp1.hiN+' plants</b>, output '+
+              '<b style="color:'+cropColor+'">'+rp.ramp1.hiCrop+' '+cropName+'/yr</b> or, '+
+              perF(rp.ramp1.gain)+' '+cropName+' per yr per 100 plants per '+
+              'worker. Almost every single plant spot is being worked to the limit (Maximum '+
+              'Turnover Rate) with '+fam+' Famil'+(fam>1?'ies':'y')+' ('+nw+' Worker'+
+              (nw>1?'s':'')+'). Has '+
+              (limitFit.peakCrop>0?Math.round(100*rp.ramp1.hiCrop/limitFit.peakCrop):0)+
+              '% the yearly yield of Absolute Max while only using '+
+              (limitFit.peakN>0?Math.round(100*rp.ramp1.hiN/limitFit.peakN):0)+
+              '% of the number of plants. If you have excess families and limited land, you may want '+
+              'to build multiple smaller plots of this size instead of fewer larger ones. '+
+              'Also, below this number of plants, while Land '+
+              'Efficiency is still maximum, Labor Efficiency is still low ('+nw+' Worker'+
+              (nw>1?'s':'')+' can still produce a little more if given more plants, compare with '+
+              'GLLE).</li>';
+            out += '<li><b>Max Size @ Good Land &amp; Labor Efficiency (GLLE) '+rp.ramp2.hiN+
+              ' plants</b>, output '+
+              '<b style="color:'+cropColor+'">'+rp.ramp2.hiCrop+' '+cropName+'/yr</b> or, '+
+              perF(rp.ramp2.gain)+' '+cropName+' per yr per 100 plants per '+
+              'worker. Has '+
+              (limitFit.peakCrop>0?Math.round(100*rp.ramp2.hiCrop/limitFit.peakCrop):0)+
+              '% the yearly yield of Absolute Max while only using '+
+              (limitFit.peakN>0?Math.round(100*rp.ramp2.hiN/limitFit.peakN):0)+
+              '% of the number of plants. This is the sweet spot where for '+fam+' Famil'+
+              (fam>1?'ies':'y')+' ('+nw+' Worker'+(nw>1?'s':'')+'), you optimize for both '+
+              'decent Land Efficiency AND Labor Efficiency.</li>';
+          } else {
+            // No ramps means outputRamps() found no collapse: the gain stays above half of
+            // its opening value for the whole scan, so the curve is still climbing at the
+            // top and there is no plateau for a ramp to end on. Say so - a plot that quietly
+            // draws no bands reads as a bug, and the fix is a longer run, not a wider scan.
+            out += '<li><b>No Peak Land or Good Land &amp; Labor Efficiency region at this '+
+              'run length.</b> The marginal gain never collapses inside the scan - it stays '+
+              'above half of its opening climb all the way to N = '+limitFit.capN+' plants, '+
+              'the largest count measured - so the curve has no collapse for the two ramps to '+
+              'end on, and no band is drawn. That is what happens when the crew never falls '+
+              'behind the yard: a longer Sim length is what produces the collapse.</li>';
+          }
+          return out;
+        })()+'</ul>'+
+       (limitFit.bracketed ? '' : (limitFit.capAtCeiling
            ? '<b>Peak Plant Spot Utilization never fell to '+limitFit.ppsuLimit+
              '% before the scan ceiling, so this is not a limit</b> - only the best count measured.'
            : '<b>The best count sits on the '+limitFit.ppsuLimit+
              '% Peak Plant Spot Utilization limit, so the maximum may lie further out.</b>'))+
-      ' Read off the curve at this step size, not a closed-form limit.</div></div>';
+      '<div style="margin-top:4px">The Output boxes are the spread of the per-year figure over the run\'s own qualifying years '+
+      '(whole years only, Y1 excluded) &mdash; box is the interquartile range, the bar inside it the median, the dot the mean, '+
+      'and the whiskers the lowest and highest year. Whiskers span the measured range rather than 1.5&times;IQR because a run has too few years for outlier rejection to mean anything.</div></div>';
   return s;
+}
+// The mouse IS the reference line. Moving it over the plot reports the values at the
+// nearest measured plant count, so the curve can be read without hunting for a hover
+// target the size of a 2.6px circle.
+function wirePlotMouse(){
+  var svg = document.getElementById('limitPlot'), tip = document.getElementById('refTip');
+  if (!svg || !tip || !limitFit || !limitFit.pts.length) return;
+  var line = svg.querySelector('#refLine');
+  if (!line) return;
+  var pts = limitFit.pts, f = limitFit;
+  // These margins MUST match limitFitBlock()'s exactly. They are duplicated rather than
+  // shared because the hover maths has to read the same frame the SVG was drawn in, and
+  // when mB was widened for the larger x tick labels this copy was the one place that
+  // would have kept the old value - which would have shifted every hover by a few pixels
+  // and put the readout on the wrong plant count.
+  var W = PLOT_W, H = PLOT_H, mL = 58, mT = 50, mB = 60;
+  var mR = 169;                    // == TURN_TITLE + 20 in limitFitBlock(); see there
+  var pw = W - mL - mR, ph = H - mT - mB;
+  var lo = pts[0].n, hi = pts[pts.length-1].n;
+  function X(n){ return mL + (hi>lo ? (n-lo)/(hi-lo) : 0.5)*pw; }
+  function nearest(n){
+    var best = pts[0], bd = Infinity;
+    for (var i=0; i<pts.length; i++){
+      var d = Math.abs(pts[i].n - n);
+      if (d < bd){ bd = d; best = pts[i]; }
+    }
+    return best;
+  }
+  function hide(){
+    line.setAttribute('visibility','hidden');
+    tip.innerHTML = '<span style="color:#777">Move the mouse over the plot to read a plant count.</span>';
+  }
+  function place(ev){
+    var r = svg.getBoundingClientRect();
+    if (!r.width) return;
+    var vb = W / r.width;                       // viewBox units per CSS pixel
+    var x = (ev.clientX - r.left) * vb;
+    if (x < mL-6 || x > mL+pw+6){ hide(); return; }
+    var frac = (x - mL) / pw;
+    var n = Math.round(lo + frac*(hi-lo));
+    var q = nearest(n);
+    var px = X(q.n).toFixed(1);
+    line.setAttribute('x1', px); line.setAttribute('x2', px);
+    line.setAttribute('visibility','visible');
+    // The named points are flagged. Order is fixed - Abs Max, then the four region edges
+    // left to right - and the first match wins, so a count that is two of them at once is
+    // named by the more important one rather than flickering between labels as the mouse moves.
+    var flag = '', rp = f.ramps;
+    if (q.n === f.peakN)      flag = '  &lt;-- ABS MAX';
+    // PLE MAX is the right-hand edge of the PLE band. The old turnover-based pleN knee is
+    // gone from here: the band is what the plot draws, and naming a second, invisible
+    // count as "Max Size with Peak Land Efficiency" only contradicted its own label.
+    else if (rp && q.n === rp.ramp1.loN) flag = '  &lt;-- PLE MIN';
+    else if (rp && q.n === rp.ramp1.hiN) flag = '  &lt;-- PLE MAX';
+    else if (rp && q.n === rp.ramp2.loN) flag = '  &lt;-- GLLE MIN';
+    else if (rp && q.n === rp.ramp2.hiN) flag = '  &lt;-- GLLE MAX';
+    // A region is a span between its two bounds, not just its endpoints, so a count inside
+    // one is called out separately rather than being left to look identical to every other
+    // count on the curve. The trough between the two regions is named too, since it is the
+    // gap the whole reading is about.
+    else if (rp && q.n > rp.ramp1.loN && q.n < rp.ramp1.hiN) flag = '  &lt;-- IN PLE REGION';
+    else if (rp && q.n > rp.ramp2.loN && q.n < rp.ramp2.hiN) flag = '  &lt;-- IN GLLE REGION';
+    else if (rp && rp.dip && q.n > rp.dip.loN && q.n < rp.dip.hiN) flag = '  &lt;-- WINTER TRAP (LOW WPSU)';
+    var col = cropColor;
+    // The quartiles are in the box plot and the note under it; repeating them in a tooltip
+    // that already has five lines just made it harder to read at a glance.
+    var st = boxStats(q);
+    var spread = st
+      ? '<br>Years: '+st.n+' &middot; range '+st.lo+'&ndash;'+st.hi
+      : '';
+    tip.innerHTML =
+      '<b>'+q.n+' plants</b>'+flag+'<br>'+
+      'Output: <span style="color:'+col+'">'+q.crop+' '+cropName+'/yr</span> ('+q.out.toFixed(0)+' harvests/yr)'+
+      spread+'<br>'+
+      'Avg Plant Spot Turnover: '+((q.turn||0).toFixed(2))+' /yr<br>'+
+      'Peak Plant Spot: '+q.ppsuPct.toFixed(1)+'%<br>'+
+      'Winter Plant Spot: '+(q.wpsuPct === undefined ? '--' : q.wpsuPct.toFixed(1)+'%');
+  }
+  hide();
+  svg.onmousemove = place;
+  svg.onmouseleave = hide;
 }
 function wireLimitBtn(){
   var b = document.getElementById('findLimitBtn');
@@ -2055,7 +3446,7 @@ function plowedCount(){ var n=0; for (var i=0;i<N;i++) if (state[i]===PLOWED) n+
 function bareCount(){ return N - ripeCount() - growingCount() - plowedCount(); }
 
 // ---------------------------------------------------------------- render
-  var COL = {plow:'#8B4513', sow:'#2e9e44', harvest:'#e67e22', walk:'#1565c0', drop:'#7cc4f2', clog:'#c0392b', idle:'#ddd', chore:'#ddd', ripeWait:'#ffffff'};
+  var COL = {plow:'#8B4513', sow:'#2e9e44', harvest:'#e67e22', walk:'#1565c0', drop:'#7cc4f2', clog:'#c0392b', idle:'#ddd', chore:'#ddd', water:'#d8d2c4', ripeWait:'#ffffff'};
 function secs2clock(s){
   var d = Math.floor(s/CFG.tick) + 1;
   var into = s - (d-1)*CFG.tick;
@@ -2094,7 +3485,7 @@ function makeAxis(container, width){
 var SPOT_BARE=0, SPOT_PLOWED=1, SPOT_GROWING=2, SPOT_RIPE=3;
 var SPOT_FILL = ['#ffffff', '#c69c6d', '#b8e6b8', '#e67e22'];
 var SPOT_NAME = ['bare', 'plowed', 'growing', 'ripe'];
-  var TASK_FILL = {plow:'#8B4513', sow:'#2e9e44', harvest:'#e67e22', walk:'#1565c0', drop:'#7cc4f2', clog:'#c0392b', idle:'#dcdcdc', chore:'#dcdcdc'};
+  var TASK_FILL = {plow:'#8B4513', sow:'#2e9e44', harvest:'#e67e22', walk:'#1565c0', drop:'#7cc4f2', clog:'#c0392b', idle:'#dcdcdc', chore:'#dcdcdc', water:'#e8e2d4'};
 var CELL = 22;
 var AXIS_H = 22, ROW_H_WORKER = 18, ROW_H_PLANT = 11;
 
@@ -2156,8 +3547,11 @@ function renderTimeRuler(){
 // 40 repaints a second cheap.
 var gSig = '', gCells = [], wCells = [], gridSvg = null, shedCell = null;
 function buildGrids(){
-  var sig = [N, COLS, ROWS, NW].join('|');
-  if (sig === gSig) return false;   // geometry unchanged, DOM still valid
+      // Advanced Mode belongs in this key. It changes the cell count and the overlay
+      // height without touching N/COLS/ROWS/NW, so without it here the memo hit skipped
+      // the rebuild and unchecking the box left the two-bed grid on screen.
+      var sig = [N, COLS, ROWS, NW, ADV_MODE ? 1 : 0].join('|');
+      if (sig === gSig) return false;   // geometry unchanged, DOM still valid
   gSig = sig; gCells = []; wCells = []; shedCell = null;
   var host = document.getElementById('gridKey');
   host.innerHTML = '';
@@ -2166,45 +3560,148 @@ function buildGrids(){
   wrap.style.position = 'relative';   // containing block for the SVG overlay
   // Shed gutter: SHED_DX cells wide, holding the single shed square at the
   // west end of spot 1's row. It is layout, not overlay, so nothing clips.
-  var gut = document.createElement('div');
-  gut.style.cssText = 'position:relative;width:'+(SHED_DX*CELL)+'px;';
+  // ABSOLUTE, not in flow. It used to be a flow element SHED_DX cells wide, which pushed
+  // the whole grid 11 cells right of the wrap's origin - so bed 2's leftmost column, which
+  // is meant to sit ON the shed, rendered at the gutter's trailing edge instead, and every
+  // blue walk line was a full shed-width out. Taking it out of flow lets the grid start at
+  // x=0, which is where drawX() puts a negative column.
   var sh = document.createElement('div');
-  // Indistinguishable from a regular spot cell except for the letter: same box
-  // model, same type, bare-white fill. Standalone so it carries its own full
-  // border where grid cells share edges with the table.
-  sh.style.cssText = 'box-sizing:border-box;position:absolute;left:0;top:'+((ROWS-1)*CELL)+'px;'
+  sh.style.cssText = 'box-sizing:border-box;position:absolute;left:0;z-index:2;'
+    + 'top:'+(visRow(ROWS-1)*CELL)+'px;'
     + 'width:'+CELL+'px;height:'+CELL+'px;line-height:'+CELL+'px;text-align:center;'
     + 'font-size:10px;font-weight:bold;color:#333;background:#fff;border:1px solid #8f8f88;';
   sh.textContent = 'S';
   sh.title = 'Shed - loot drop-off. Not a plant spot; its state never changes.';
-  gut.appendChild(sh);
+  wrap.appendChild(sh);
   shedCell = sh;
-  wrap.appendChild(gut);
   var tbl = document.createElement('div');
   tbl.style.display = 'grid';
-  tbl.style.gridTemplateColumns = 'repeat('+COLS+', '+CELL+'px)';
+  var totalCols = COLS + shedOffsetA(bed1ColsA());
+  tbl.style.gridTemplateColumns = 'repeat('+totalCols+', '+CELL+'px)';
   tbl.style.gridAutoRows = CELL+'px';
-  tbl.style.borderLeft = '2px solid #8f8f88';
-  tbl.style.borderTop = '2px solid #8f8f88';
-  for (var r = 0; r < ROWS; r++){
-    for (var c = 0; c < COLS; c++){
-      var i = spotIndexAt(r, c);
-      var spare = (i < 0);
-      var cell = document.createElement('div');
-      cell.style.cssText = 'box-sizing:border-box;width:'+CELL+'px;height:'+CELL+'px;line-height:'+CELL+'px;'
-        + 'text-align:center;font-size:10px;font-weight:bold;border-right:1px solid #8f8f88;border-bottom:1px solid #8f8f88;'
-        + (spare ? 'background:#f7f7f4;color:#c4c4bf;' : 'color:#333;');
-      cell.textContent = spare ? '' : String(i+1);
-      if (!spare) cell.title = 'spot '+(i+1)+'  '+coordLabel(i);
-      tbl.appendChild(cell);
-      gCells.push({el:cell, i:i});
+  // Pads are empty lattice squares, not holes. They need the same hairline as a cell,
+  // or every gridline that runs past a filled cell into a gap disappears - which is
+  // what left isolated cells like #48 with no right border.
+  // Pads and lane cells are invisible spacers that hold the grid template open. They
+  // carry NO borders. A pad stands for the shed gutter, for a gutter column, or for the
+  // slack in a bed, so bordering them paints a lattice over ground no bed occupies -
+  // phantom columns down the shed side, and rows of empty cells wherever a bed is short.
+  // The lattice is drawn per bed by frame() below.
+  var padEl = function(){
+    var d = document.createElement('div');
+    d.style.cssText = 'box-sizing:border-box;width:'+CELL+'px;height:'+CELL+'px;';
+    return d;
+  };
+  var laneEl = function(){
+    var d = document.createElement('div');
+    d.style.cssText = 'box-sizing:border-box;width:'+CELL+'px;height:'+CELL+'px;';
+    return d;
+  };
+  var cellEl = function(){
+    var d = document.createElement('div');
+    d.style.cssText = 'box-sizing:border-box;width:'+CELL+'px;height:'+CELL+'px;line-height:'+CELL+'px;'
+      + 'text-align:center;font-size:10px;font-weight:bold;color:#333;';
+    return d;
+  };
+  var put = function(i){
+    var d = cellEl();
+    if (i >= 0){
+      d.textContent = String(i+1);
+      d.title = 'spot '+(i+1)+'  '+coordLabel(i);
+      gCells.push({el:d, i:i});
+    }
+    tbl.appendChild(d);
+    return d;
+  };
+  var b1r = bed2EndRow(), totalRowsA = advancedOn() ? ROWS + GUT_H : ROWS, c, r, v;
+  // Cells carry right/bottom borders only, so the outer edges have to be added back by
+  // hand: the field's left edge, bed 1's top edge, the top of bed 2b and the top of the
+  // horizontal lane. Borders therefore go on individual cells, picked by column and row.
+  // Anchoring them on "the first cell appended in the row" is what put a fat line down the
+  // middle of bed 1: the first appended cell there is the shed gutter at column SHED_DX,
+  // not bed 1's own column 0.
+  // Every cell and pad carries border-right + border-bottom only. That gives a uniform
+  // 1px interior lattice with no doubling - giving each cell all four sides instead puts
+  // the right border of one cell next to the left border of its neighbour and paints a
+  // 2px rule down the middle of the yard. The 2px region outlines are therefore drawn
+  // separately, as absolutely positioned frames on top of the lattice.
+  for (v = 0; v < totalRowsA; v++){
+    if (advancedOn() && v >= b1r && v < b1r + GUT_H){
+      for (c = 0; c < totalCols; c++){                      // horizontal lane
+        tbl.appendChild(laneEl());          // horizontal gutter
+      }
+    } else if (advancedOn() && v < b1r){
+      var rbTop = bed2bRowsA() - 1;
+      for (c = bed2C0(); c < COLS; c++){                    // bed 2a | vertical rift | bed 2b
+        var i2 = spotIndexAt(v, c), q2;
+        if (c >= vgC0() && c <= vgC1()) q2 = laneEl();       // the vertical gutter
+        else if (i2 >= 0){
+          q2 = cellEl();
+          q2.textContent = String(i2+1);
+          q2.title = 'spot '+(i2+1)+'  '+coordLabel(i2);
+          gCells.push({el:q2, i:i2});
+        } else q2 = padEl();
+        tbl.appendChild(q2);
+      }
+    } else {
+      r = advancedOn() ? v - GUT_H : v;
+      for (c = 0; c < shedOffsetA(bed1ColsA()); c++) tbl.appendChild(padEl());
+      for (c = 0; c < COLS; c++){
+        put(spotIndexAt(r, c));                            // put() appends
+      }
     }
   }
   wrap.appendChild(tbl);
+
+  // Region frames. One per bed, carrying the 2px outline plus the interior lattice as a
+  // background, so rules run continuously across a bed and stop dead at its edge.
+  //
+  // A bed's frame must cover its OCCUPIED extent, not its nominal rectangle. Plant fill is
+  // column-major and stops as soon as it has placed its share, so the last column of a bed
+  // is usually partial and the columns beyond it hold nothing at all - bed 1 and 2b are
+  // filled from the right, so it is their LEFT columns that come up short. Outlining the
+  // nominal rectangle framed those empty columns and read as phantom columns. Measuring
+  // the real extent from the layout is the fix; the lattice is unchanged.
+  var extent = function(c0, r0, c1, r1){
+    var lo = c1 + 1, hi = c0 - 1, top = r1 + 1, bot = r0 - 1;
+    for (var rr = r0; rr <= r1; rr++){
+      for (var cc = c0; cc <= c1; cc++){
+        if (spotIndexAt(rr, cc) >= 0){
+          if (cc < lo) lo = cc;
+          if (cc > hi) hi = cc;
+          if (rr < top) top = rr;
+          if (rr > bot) bot = rr;
+        }
+      }
+    }
+    return (hi < lo) ? null : [lo, top, hi, bot];
+  };
+  var frame = function(box){
+    if (!box) return;
+    var c0 = box[0], r0 = box[1], c1 = box[2], r1 = box[3];
+    var x = (c0+shedOffsetA(bed1ColsA()))*CELL, y = visRow(r0)*CELL;
+    var w = (c1-c0+1)*CELL, h = (r1-r0+1)*CELL;
+    var f = document.createElement('div');
+    f.style.cssText = 'box-sizing:border-box;position:absolute;pointer-events:none;z-index:1;'
+      + 'left:'+x+'px;top:'+y+'px;width:'+w+'px;height:'+h+'px;'
+      + 'border:2px solid #6f6f68;'
+      + 'background-image:'
+      + 'repeating-linear-gradient(to right, rgba(143,143,136,.5) 0 1px, rgba(0,0,0,0) 1px '+CELL+'px),'
+      + 'repeating-linear-gradient(to bottom, rgba(143,143,136,.5) 0 1px, rgba(0,0,0,0) 1px '+CELL+'px);';
+    wrap.appendChild(f);
+  };
+  if (advancedOn()){
+    frame(extent(bed2C0(), 0, vgC0()-1, b1r-1));            // bed 2a
+    frame(extent(bed2bC0(), 0, bed2bC1(), bed2bRowsA()-1)); // bed 2b
+    frame(extent(0, b1r, COLS-1, ROWS-1));                  // bed 1
+  } else {
+    frame(extent(0, 0, COLS-1, ROWS-1));
+  }
+
   // SVG overlay for the blue worker-walk lines, sitting on top of the cells
   var svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-  svg.setAttribute('width', (SHED_DX+COLS)*CELL);
-  svg.setAttribute('height', ROWS*CELL);
+  svg.setAttribute('width', totalCols*CELL);
+  svg.setAttribute('height', totalRowsA*CELL);
   svg.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;';
   wrap.appendChild(svg);
   gridSvg = svg;
@@ -2289,14 +3786,25 @@ function paintGrids(){
     var q = workerAt(w, secs);
     wCells[w].style.background = TASK_FILL[q.task];
     if (q.task === 'drop') shedDropping = true;
-    // show the cell being worked: W walking, D dropping loot, C clogged at the
-    // shed waiting for it to free up, C for a house chore (idle colour), ? idle
-    var lbl = (q.task === 'idle') ? '?' : (q.task === 'chore' ? 'C' : (q.task === 'walk' ? 'W' : (q.task === 'drop' ? 'D' : (q.task === 'clog' ? 'X' : String(q.pos+1)))));
+    // show the cell being worked: W walking, D dropping loot, X clogged at the
+    // shed waiting for it to free up, C for a refuel trip, R for a re-watering
+    // trip (both idle colour), ? idle
+    var lbl = (q.task === 'idle') ? '?'
+      : (q.task === 'water') ? 'R'
+      : (q.task === 'chore') ? 'C'
+      : (q.task === 'walk') ? 'W'
+      : (q.task === 'drop') ? 'D'
+      : (q.task === 'clog') ? 'X'
+      : String(q.pos+1);
     wCells[w].textContent = lbl;
     // pos -1 is the shed, which has no spot number.
     var where = (q.pos < 0) ? 'shed' : ('spot '+(q.pos+1));
-    wCells[w].title = 'worker '+(w+1)+' - '+(q.task==='chore' ? 'house chore (refuel trip)' : q.task)+(q.task==='walk'?' (to '+where+')':' at '+where);
-    var verb = (q.task==='chore') ? 'doing a house chore at ' : (q.task==='walk' ? 'walking to ' : 'at ');
+    wCells[w].title = 'worker '+(w+1)+' - '+
+      (q.task==='chore' ? 'house chore (refuel trip)' : (q.task==='water' ? 'house chore (re-water trip)' : q.task))+
+      (q.task==='walk'?' (to '+where+')':' at '+where);
+    var verb = (q.task==='chore') ? 'doing a house chore (refuel) at ' :
+               (q.task==='water') ? 'doing a house chore (re-water) at ' :
+               (q.task==='walk' ? 'walking to ' : 'at ');
     names.push('w'+(w+1)+' '+verb+where+(q.task==='idle'?' idle':''));
     if (q.pos < 0) shedBusy = true;
   }
@@ -2307,7 +3815,7 @@ function paintGrids(){
     shedCell.style.background = shedDropping ? '#7cc4f2' : '#fff';
   }
   document.getElementById('timeVal').textContent =
-    'day '+day.toFixed(1)+'  ('+secs.toFixed(1)+'s)  '+names.join('   ');
+    calDayStr(day) + ', Day ' + day.toFixed(1) + ' (' + secs.toFixed(1) + 's), ' + names.join('  ');
 }
 function renderGridKey(){ buildGrids(); paintGrids(); }
 // ------------------------------------------------- viewport window
@@ -2491,10 +3999,14 @@ function renderAll(){
       b.style.left = (90 + a.start*PX)+'px';
       b.style.width = Math.max(3,(a.end-a.start)*PX)+'px';
       b.style.top='0px'; b.style.height=ROW_H_WORKER+'px'; b.style.background=COL[a.type];
-      b.title = (a.type === 'chore')
-        ? 'house chore - refuel trip: walk '+a.cm+' cm to the shed, then wait '+CFG.refuel+' day'+(CFG.refuel===1?'':'s')
-          +'  '+secs2clock(a.start)+' -> '+secs2clock(a.end)+'  ('+(a.end-a.start).toFixed(3)+'s, idle)'
-        : a.type+' spot '+a.spot+' ('+coordLabel(a.spot-1)+')  '+secs2clock(a.start)+' -> '+secs2clock(a.end)+'  ('+(a.end-a.start).toFixed(3)+'s)';
+      var isHouseChore = (a.type === 'chore' || a.type === 'water');
+    var what = (a.type === 'chore')
+      ? 'house chore at the house - refuel trip, waiting '+CFG.refuel+' day'+(CFG.refuel===1?'':'s')
+      : (a.type === 'water')
+        ? 'house chore at the house - re-water trip, waiting '+CFG.rewater+' day'+(CFG.rewater===1?'':'s')
+        : a.type+' spot '+a.spot+' ('+coordLabel(a.spot-1)+')';
+    b.title = what+'  '+secs2clock(a.start)+' -> '+secs2clock(a.end)+
+      '  ('+(a.end-a.start).toFixed(3)+'s'+(isHouseChore?', idle':'')+')';
       row.appendChild(b);
     });
     cw.appendChild(row);
@@ -2602,7 +4114,7 @@ function readNum(id, def, min, max){
 // shape-only preview call this, so what you see mid-drag cannot diverge from
 // what you get on release. Rows/Cols/grid label are all derived here.
 function applyLayout(){
-  var cap = nSliderMaxCap || plantsCap(), floor = plantMin();
+  var cap = plantCeil(), floor = plantMin();
   var nsl = document.getElementById('nSlider'), nnum = document.getElementById('nNum');
   nsl.max = String(cap);
   nnum.max = String(cap);
@@ -2614,9 +4126,13 @@ function applyLayout(){
   var auto = autoRows(N);
   var sl = document.getElementById('rowsSlider');
   var sq = document.getElementById('makeSquare').checked;
-  sl.max = String(Math.max(30, auto));
+  sl.max = String(Math.max(50, auto));      // portrait Advanced Mode needs headroom
+  sl.min = String(ADV_ROW_MIN);             // rows floor: bed 2 needs room above the gutter
   if (sq){ ROWS = auto; sl.value = String(ROWS); }
   else ROWS = Math.max(1, Math.round(readNum('rowsSlider', 2, 1, 500)));
+  // Advanced Mode needs at least ADV_ROW_MIN rows for bed 2 to exist at all.
+  if (ADV_MODE && ROWS < ADV_ROW_MIN) ROWS = ADV_ROW_MIN;
+  sl.value = String(ROWS);
   COLS = Math.max(1, Math.ceil(N / ROWS));
   document.getElementById('rowsVal').textContent = String(ROWS);
   document.getElementById('colsOut').value = String(COLS);
@@ -2625,18 +4141,23 @@ function applyLayout(){
   nnum.value = String(N);
   if (document.activeElement !== nsl) nsl.value = String(Math.min(cap, Math.max(1, N)));
 }
-function refresh(){
-  // A Find limit sweep owns N / COLS / goldenMask while it runs; letting a
-  // refresh through mid-sweep would resize the yard under it and corrupt both.
-  if (limitRun) return;
+// Reads every control into CFG / CFG_YM / N / families / NW. Split out of refresh() so a
+// Find limit sweep can pull what the fields show right now: the spinner fields (capT
+// included) refresh on an 800ms debounce, so a sweep started inside that window used to
+// simulate the PREVIOUS run length while every label quoted the new one. It also means a
+// refresh is the only other caller, and it runs it unconditionally before any layout.
+function pullCfg(){
   CFG.tick    = readNum('tick', 40, 0.001, 10000);
   CFG.plow    = readNum('plow', 5.905, 0.001, 10000);
   CFG.sow     = readNum('sow', 2.567, 0.001, 10000);
   CFG.harv    = readNum('harv', 2.289, 0.001, 10000);
   CFG.dropLoot = readNum('dropLoot', 2.567, 0.001, 10000);
   CFG.growTicks = Math.round(readNum('growT', 70, 1, 10000));
-  CFG_YM = readNum('yieldMod', 1.15, 0, 1000);
+  CFG_YM = readNum('yieldMod', 1.16, 0, 1000);
   CFG.refuel = readNum('refuelDays', 5, 0, 3650);
+  CFG.refuelFirstDay = readNum('refuelFirstDay', 15, 1, 31);
+  CFG.rewater = readNum('rewaterDays', 5, 0, 3650);
+  CFG.rewaterFirstDay = readNum('rewaterFirstDay', 3, 1, 31);
   CROP_BASEYIELD[70] = readNum('baseYieldBeetroots', 6, 0, 10000);
   CROP_BASEYIELD[98] = readNum('baseYieldCarrots', 9, 0, 10000);
   CROP_BASEYIELD[126] = readNum('baseYieldCabbages', 12, 0, 10000);
@@ -2650,12 +4171,18 @@ function refresh(){
 CFG.simDays = (document.getElementById('capUnit').value === 'y')
     ? Math.round(readNum('capT', 3, 1, 60) * YEAR_DAYS) - CAL_OFFSET
     : Math.round(readNum('capT', 365, 1, 20000));
-  N   = Math.max(plantMin(), Math.min(plantsCap(), Math.round(readNum('nNum', 50, 1, PLANT_HARD))));
+  N   = Math.max(plantMin(), Math.min(plantCeil(), Math.round(readNum('nNum', 50, 1, PLANT_HARD))));
   // A family is two pairs of hands; a smallholding is three. The spinner counts
   // families, everything downstream works in individual workers.
   var famMult = document.getElementById('smallholding').checked ? 3 : 2;
   families = Math.max(1, Math.round(readNum('nFamilies', 1, 1, 10)));
   NW  = Math.max(1, Math.min(30, families * famMult));
+}
+function refresh(){
+  // A Find limit sweep owns N / COLS / goldenMask while it runs; letting a
+  // refresh through mid-sweep would resize the yard under it and corrupt both.
+  if (limitRun) return;
+  pullCfg();
   var fh = document.getElementById('famHint');
   if (fh) fh.textContent = '= ' + NW + ' worker' + (NW > 1 ? 's' : '');
   var yh = document.getElementById('yieldHint');
@@ -2678,6 +4205,21 @@ CFG.simDays = (document.getElementById('capUnit').value === 'y')
 // simulation was slow enough to be worth reporting, show the pill and yield;
 // otherwise run inline with no visual churn at all.
 var lastSimMs = 0, simRunning = false, refreshPending = false;
+// The tab title doubles as a busy light. With a few of these open there is no other way
+// to tell at a glance which one is mid-simulation - the progress pill sits in the page,
+// and a background tab is not painting anyway.
+var TITLE_IDLE = 'MLTC Veg Sim';
+function setBusy(busy){ document.title = busy ? TITLE_IDLE+'-Running' : TITLE_IDLE; }
+// The sweep drives the title with its own progress. A backgrounded tab cannot show the
+// progress pill or the plot, but the tab strip is browser chrome rather than page
+// rendering, so a title change still repaints there - as long as the window itself is
+// visible. Minimised or fully occluded, nothing in the window is painted, so the value is
+// still right in the DOM and shows on return, just not live. Before the PPSU crossing
+// there is no total and no honest ETA, so only the count appears then.
+function setTitleSweep(R){
+  var s = TITLE_IDLE+' '+R.sims+(R.capSet ? '/'+R.total : '');
+  document.title = s + etaText(R, limitRemaining(R));
+}
 function showProgress(on, txt){
   var el = document.getElementById('simProgress');
   if (!el) return;
@@ -2700,6 +4242,7 @@ function withProgress(fn){
   }
   simRunning = true;
   showProgress(true);
+  setBusy(true);
   requestAnimationFrame(function(){
     setTimeout(function(){
       var t0 = performance.now();
@@ -2708,6 +4251,7 @@ function withProgress(fn){
         lastSimMs = performance.now() - t0;
         simRunning = false;
         showProgress(false);
+        setBusy(false);
         if (refreshPending){ refreshPending = false; runFull(); }
       }
     }, 0);
@@ -2770,7 +4314,7 @@ function paintGridShape(){
   if (gridSvg) while (gridSvg.firstChild) gridSvg.removeChild(gridSvg.firstChild);
 }
 function liveGridShape(){
-  N = Math.max(plantMin(), Math.min(plantsCap(), Math.round(readNum('nNum', 50, 1, PLANT_HARD))));
+  N = Math.max(plantMin(), Math.min(plantCeil(), Math.round(readNum('nNum', 50, 1, PLANT_HARD))));
   applyLayout();         // same geometry maths as refresh(), so COLS never lags
   // Only repaint neutral + show the banner if the geometry actually moved.
   // A change that leaves the grid alone (e.g. sim length) must not wipe the
@@ -2787,7 +4331,28 @@ document.getElementById('rowsSlider').addEventListener('input', function(){
   liveGridShape();
 });
 document.getElementById('rowsSlider').addEventListener('change', function(){ refresh(); });
-document.getElementById('makeSquare').addEventListener('change', function(){ refresh(); });
+document.getElementById('makeSquare').addEventListener('change', function(){
+    // Square fixes the row count from the plant count, so the row slider is not a live
+    // setting while it is on. Left enabled it would silently do nothing, which reads as
+    // a broken control rather than a disabled one.
+    syncRowsEnabled();
+    refresh();
+  });
+  syncRowsEnabled();
+  // Called after the rows slider is built as well as from the box, so either control can
+  // be the one that changes the state.
+  function syncRowsEnabled(){
+    var am = document.getElementById('advancedMode');
+    if (am) am.addEventListener('change', function(){ ADV_MODE = am.checked; refresh(); });
+    var on = document.getElementById('makeSquare').checked;
+    var sl = document.getElementById('rowsSlider');
+    if (!sl) return;
+    sl.disabled = !!on;
+    sl.style.opacity = on ? '0.35' : '';
+    sl.style.cursor   = on ? 'not-allowed' : '';
+    var rv = document.getElementById('rowsVal');
+    if (rv) rv.style.opacity = on ? '0.35' : '';
+  }
 var CROPS = {70:{name:'Beetroots', col:'rgb(110,0,150)'}, 98:{name:'Carrots', col:'rgb(220,110,0)'}, 126:{name:'Cabbages', col:'rgb(0,130,40)'}};
 document.getElementById('cropSelect').addEventListener('change', function(e){
   document.getElementById('growT').value = e.target.value;   // crop sets Grow time
@@ -2809,7 +4374,7 @@ function scheduleRefresh(){
   if (simTimer) clearTimeout(simTimer);
   simTimer = setTimeout(function(){ simTimer = null; refresh(); }, SIM_DEBOUNCE_MS);
 }
-['nNum','nFamilies','capT','yieldMod','refuelDays'].forEach(function(id){
+['nNum','nFamilies','capT','yieldMod','refuelDays','refuelFirstDay','rewaterDays','rewaterFirstDay'].forEach(function(id){
   document.getElementById(id).addEventListener('change', scheduleRefresh);
 });
 // A checkbox toggle is one deliberate action, so it refreshes immediately
